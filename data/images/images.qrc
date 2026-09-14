@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/">
+        <file>C_transparent.png</file>
+        <file>C_desaturated.png</file>
+    </qresource>
+</RCC>

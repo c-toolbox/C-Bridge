@@ -1,0 +1,54 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "installDir": "${sourceDir}/../install",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "D:/Craft/VS2022_qt6X",
+        "CBRIDGE_FFMPEG_ROOT": "D:/FFmpeg/mas2026/local64",
+        "CBRIDGE_FFMPEG_LIBDIR_NAME": "bin-video"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows MSVC (Qt + KF6 from Craft)",
+      "inherits": "windows-base"
+    },
+    {
+      "name": "windows-msvc-no-ndi",
+      "displayName": "Windows MSVC without the NDI sink",
+      "inherits": "windows-base",
+      "binaryDir": "${sourceDir}/build-no-ndi",
+      "cacheVariables": {
+        "BUILD_CBRIDGE_WITH_NDI": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc",
+      "configurePreset": "windows-msvc",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug"
+    }
+  ]
+}

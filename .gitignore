@@ -1,0 +1,42 @@
+# Build output
+build/
+build-*/
+install/
+out/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+compile_commands.json
+
+# Qt generated
+*.moc
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.qmlc
+*.jsc
+.qmlls.ini
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Runtime
+data/log/
+*.log
+
+# Docusaurus
+docs/node_modules/
+docs/.docusaurus/
+docs/build/
+
+# OS
+Thumbs.db
+.DS_Store

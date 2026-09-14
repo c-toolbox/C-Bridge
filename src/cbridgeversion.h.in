@@ -1,0 +1,9 @@
+#pragma once
+
+#define CBRIDGE_VERSION_STRING "@PROJECT_VERSION@"
+#define CBRIDGE_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define CBRIDGE_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define CBRIDGE_VERSION_PATCH @PROJECT_VERSION_PATCH@
+
+/// Fallback data directory so the app also runs straight from a build tree.
+#define CBRIDGE_SOURCE_DATA_DIR "@CMAKE_SOURCE_DIR@/data"
