@@ -1,0 +1,28 @@
+/**
+ * Docusaurus infima overrides. The palette matches the Breeze-derived colours
+ * used by the Qt application so the docs and the UI look related.
+ */
+
+:root {
+  --ifm-color-primary: #3daee9;
+  --ifm-color-primary-dark: #25a0e5;
+  --ifm-color-primary-darker: #1b98de;
+  --ifm-color-primary-darkest: #167db7;
+  --ifm-color-primary-light: #55b8ed;
+  --ifm-color-primary-lighter: #63beef;
+  --ifm-color-primary-lightest: #8acff3;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #3daee9;
+  --ifm-color-primary-dark: #25a0e5;
+  --ifm-color-primary-darker: #1b98de;
+  --ifm-color-primary-darkest: #167db7;
+  --ifm-color-primary-light: #55b8ed;
+  --ifm-color-primary-lighter: #63beef;
+  --ifm-color-primary-lightest: #8acff3;
+  --ifm-background-color: #232629;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}

@@ -2,6 +2,7 @@
 
 #include "bridgecontroller.h"
 #include "cbridgeversion.h"
+#include "ndi/ndiruntime.h"
 
 #include <KAboutData>
 #include <KColorSchemeManager>
@@ -224,7 +225,11 @@ QString BridgeApplication::libdatachannelVersion() const
 QString BridgeApplication::ndiVersion() const
 {
 #ifdef CBRIDGE_NDI_SUPPORT
-    return u"SDK headers present (runtime loaded on demand)"_s;
+    NdiRuntime &runtime = NdiRuntime::instance();
+    if (runtime.ensureLoaded()) {
+        return runtime.version();
+    }
+    return u"unavailable: %1"_s.arg(runtime.lastError());
 #else
     return u"not built in"_s;
 #endif

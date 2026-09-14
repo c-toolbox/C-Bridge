@@ -4,6 +4,10 @@
 #include "sinks/tsmulticastsink.h"
 #include "webrtc/webrtcsource.h"
 
+#ifdef CBRIDGE_NDI_SUPPORT
+#include "sinks/ndisink.h"
+#endif
+
 #include <QDateTime>
 
 using namespace Qt::Literals::StringLiterals;
@@ -71,7 +75,12 @@ void StreamPipeline::start()
             m_sinks.push_back(std::make_unique<TsMulticastSink>(sinkConfig.ts));
             break;
         case SinkKind::Ndi:
-            // Added in the NDI phase; ignored here so a mixed config still runs.
+#ifdef CBRIDGE_NDI_SUPPORT
+            m_sinks.push_back(std::make_unique<NdiSink>(sinkConfig.ndi, m_config.name));
+#else
+            qWarning("Stream %s: NDI sink skipped, this build has no NDI support",
+                     qUtf8Printable(m_config.name));
+#endif
             break;
         }
     }

@@ -22,10 +22,24 @@ qt_add_executable(${TARGET_NAME}
 
   media/bitstreaminspector.cpp
   media/bitstreaminspector.h
+  media/avwrappers.h
+  media/cudacontext.cpp
+  media/cudacontext.h
+  media/videodecoder.cpp
+  media/videodecoder.h
+  media/videofilter.cpp
+  media/videofilter.h
+  media/audiodecoder.cpp
+  media/audiodecoder.h
+
+  ndi/ndiruntime.cpp
+  ndi/ndiruntime.h
 
   sinks/streamsink.h
   sinks/tsmulticastsink.cpp
   sinks/tsmulticastsink.h
+  sinks/ndisink.cpp
+  sinks/ndisink.h
 
   config/bridgeconfig.cpp
   config/bridgeconfig.h
