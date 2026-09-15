@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #include "config/bridgeconfig.h"
 
 #include <QFile>
@@ -320,66 +327,95 @@ std::optional<BridgeConfig> BridgeConfig::load(const QString &path, QString *err
     return fromJson(document.object(), error);
 }
 
-QStringList BridgeConfig::validate() const
+QStringList BridgeConfig::validateStream(const StreamConfig &candidate,
+                                         const QString &excludeId) const
 {
     QStringList problems;
+    const QString label = candidate.name.trimmed().isEmpty() ? candidate.id : candidate.name;
+
+    if (!candidate.whepUrl.isValid() || candidate.whepUrl.scheme().isEmpty()) {
+        problems.append(u"Stream \"%1\" has no valid WHEP URL."_s.arg(label));
+    }
+
+    const auto enabledSinks = std::count_if(candidate.sinks.cbegin(), candidate.sinks.cend(),
+        [](const SinkConfig &sink) { return sink.enabled; });
+    if (candidate.enabled && enabledSinks == 0) {
+        problems.append(u"Stream \"%1\" is enabled but has no enabled sink."_s.arg(label));
+    }
+
+    // Everything claimed by the other streams, so the candidate never clashes with itself.
     QSet<QString> endpoints;
     QSet<QString> ndiNames;
-    QSet<QString> ids;
-
-    for (const StreamConfig &stream : streams) {
-        const QString label = stream.name.isEmpty() ? stream.id : stream.name;
-
-        if (ids.contains(stream.id)) {
-            problems.append(u"Duplicate stream id for \"%1\"."_s.arg(label));
+    for (const StreamConfig &other : streams) {
+        if (other.id == excludeId) {
+            continue;
         }
-        ids.insert(stream.id);
-        if (!stream.whepUrl.isValid() || stream.whepUrl.scheme().isEmpty()) {
-            problems.append(u"Stream \"%1\" has no valid WHEP URL."_s.arg(label));
-        }
-
-        const auto enabledSinks = std::count_if(stream.sinks.cbegin(), stream.sinks.cend(),
-            [](const SinkConfig &sink) { return sink.enabled; });
-        if (stream.enabled && enabledSinks == 0) {
-            problems.append(u"Stream \"%1\" is enabled but has no enabled sink."_s.arg(label));
-        }
-
-        for (const SinkConfig &sink : stream.sinks) {
+        for (const SinkConfig &sink : other.sinks) {
             if (!sink.enabled) {
                 continue;
             }
-
-            switch (sink.kind) {
-            case SinkKind::TsMulticast: {
-                if (!isMulticastV4(sink.ts.groupAddress)) {
-                    problems.append(
-                        u"Stream \"%1\": \"%2\" is not an IPv4 multicast address (224.0.0.0/4)."_s
-                            .arg(label, sink.ts.groupAddress));
-                }
-                const QString endpoint = u"%1:%2"_s.arg(sink.ts.groupAddress).arg(sink.ts.port);
-                if (endpoints.contains(endpoint)) {
-                    problems.append(
-                        u"Multicast endpoint %1 is used by more than one stream."_s.arg(endpoint));
-                }
-                endpoints.insert(endpoint);
-                break;
-            }
-            case SinkKind::Ndi: {
-                if (sink.ndi.senderName.trimmed().isEmpty()) {
-                    problems.append(u"Stream \"%1\" has an NDI sink with no sender name."_s
-                                        .arg(label));
-                } else if (ndiNames.contains(sink.ndi.senderName)) {
-                    problems.append(u"NDI sender name \"%1\" is used by more than one stream."_s
-                                        .arg(sink.ndi.senderName));
-                } else {
-                    ndiNames.insert(sink.ndi.senderName);
-                }
-                break;
-            }
+            if (sink.kind == SinkKind::TsMulticast) {
+                endpoints.insert(u"%1:%2"_s.arg(sink.ts.groupAddress).arg(sink.ts.port));
+            } else if (!sink.ndi.senderName.trimmed().isEmpty()) {
+                ndiNames.insert(sink.ndi.senderName);
             }
         }
     }
 
+    for (const SinkConfig &sink : candidate.sinks) {
+        if (!sink.enabled) {
+            continue;
+        }
+
+        switch (sink.kind) {
+        case SinkKind::TsMulticast: {
+            if (!isMulticastV4(sink.ts.groupAddress)) {
+                problems.append(
+                    u"Stream \"%1\": \"%2\" is not an IPv4 multicast address (224.0.0.0/4)."_s
+                        .arg(label, sink.ts.groupAddress));
+            }
+            const QString endpoint = u"%1:%2"_s.arg(sink.ts.groupAddress).arg(sink.ts.port);
+            if (endpoints.contains(endpoint)) {
+                problems.append(
+                    u"Multicast endpoint %1 is used by more than one sink."_s.arg(endpoint));
+            }
+            endpoints.insert(endpoint);
+            break;
+        }
+        case SinkKind::Ndi: {
+            if (sink.ndi.senderName.trimmed().isEmpty()) {
+                problems.append(u"Stream \"%1\" has an NDI sink with no sender name."_s.arg(label));
+            } else if (ndiNames.contains(sink.ndi.senderName)) {
+                problems.append(u"NDI sender name \"%1\" is used by more than one sink."_s
+                                    .arg(sink.ndi.senderName));
+            } else {
+                ndiNames.insert(sink.ndi.senderName);
+            }
+            break;
+        }
+        }
+    }
+
+    return problems;
+}
+
+QStringList BridgeConfig::validate() const
+{
+    QStringList problems;
+    QSet<QString> ids;
+
+    for (const StreamConfig &stream : streams) {
+        const QString label = stream.name.trimmed().isEmpty() ? stream.id : stream.name;
+        if (ids.contains(stream.id)) {
+            problems.append(u"Duplicate stream id for \"%1\"."_s.arg(label));
+        }
+        ids.insert(stream.id);
+
+        problems.append(validateStream(stream, stream.id));
+    }
+
+    // Each cross-stream clash is reported once from either side.
+    problems.removeDuplicates();
     return problems;
 }
 

@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Dialogs
@@ -38,28 +45,25 @@ Kirigami.ApplicationWindow {
     }
 
     Kirigami.PromptDialog {
-        id: addDialog
-        title: qsTr("Add stream")
+        id: removeDialog
+        title: qsTr("Remove stream")
         standardButtons: Kirigami.Dialog.Ok | Kirigami.Dialog.Cancel
 
-        ColumnLayout {
-            Controls.TextField {
-                id: nameField
-                Layout.fillWidth: true
-                placeholderText: qsTr("Name")
-            }
-            Controls.TextField {
-                id: urlField
-                Layout.fillWidth: true
-                placeholderText: qsTr("http://localhost:8889/mystream/whep")
-            }
-        }
+        property string streamId: ""
+        property string streamName: ""
 
-        onAccepted: {
-            controller.addStream(nameField.text, urlField.text)
-            nameField.text = ""
-            urlField.text = ""
-        }
+        subtitle: qsTr("Remove \"%1\" from this configuration?").arg(streamName)
+        onAccepted: controller.removeStream(streamId)
+    }
+
+    Component {
+        id: editorPage
+        StreamEditorPage {}
+    }
+
+    function openEditor(streamId) {
+        controller.beginEditStream(streamId)
+        pageStack.push(editorPage)
     }
 
     pageStack.initialPage: Kirigami.ScrollablePage {
@@ -79,7 +83,7 @@ Kirigami.ApplicationWindow {
             Kirigami.Action {
                 text: qsTr("Add stream")
                 icon.name: "list-add"
-                onTriggered: addDialog.open()
+                onTriggered: root.openEditor("")
             },
             Kirigami.Action {
                 text: controller.running ? qsTr("Stop all") : qsTr("Start all")
@@ -125,8 +129,12 @@ Kirigami.ApplicationWindow {
                     }
 
                     ColumnLayout {
+                        id: infoColumn
                         Layout.fillWidth: true
                         spacing: 0
+
+                        // Captured here because inside the Repeater "model" is the sink list.
+                        readonly property var sinkRows: model.sinkStats
 
                         Kirigami.Heading {
                             level: 4
@@ -136,8 +144,31 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             elide: Text.ElideMiddle
                             opacity: 0.7
-                            text: model.sourceUrl + "  ->  " + model.sinks
+                            text: model.sourceUrl
                         }
+
+                        Repeater {
+                            model: infoColumn.sinkRows
+                            delegate: RowLayout {
+                                id: sinkRow
+                                required property var modelData
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Rectangle {
+                                    implicitWidth: Kirigami.Units.gridUnit * 0.5
+                                    implicitHeight: implicitWidth
+                                    radius: width / 2
+                                    color: sinkRow.modelData.open
+                                        ? Kirigami.Theme.positiveTextColor
+                                        : Kirigami.Theme.disabledTextColor
+                                }
+                                Controls.Label {
+                                    opacity: 0.7
+                                    text: sinkRow.modelData.description + "  " + sinkRow.modelData.mbps + " Mbps"
+                                }
+                            }
+                        }
+
                         Controls.Label {
                             visible: model.lastError !== ""
                             Layout.fillWidth: true
@@ -179,6 +210,24 @@ Kirigami.ApplicationWindow {
                         Controls.ToolTip.visible: hovered
                         onClicked: app.copyToClipboard(controller.mpvCommandFor(model.streamId))
                     }
+
+                    Controls.Button {
+                        icon.name: "document-edit"
+                        Controls.ToolTip.text: qsTr("Edit this stream")
+                        Controls.ToolTip.visible: hovered
+                        onClicked: root.openEditor(model.streamId)
+                    }
+
+                    Controls.Button {
+                        icon.name: "edit-delete"
+                        Controls.ToolTip.text: qsTr("Remove this stream")
+                        Controls.ToolTip.visible: hovered
+                        onClicked: {
+                            removeDialog.streamId = model.streamId
+                            removeDialog.streamName = model.name
+                            removeDialog.open()
+                        }
+                    }
                 }
             }
         }
@@ -198,6 +247,15 @@ Kirigami.ApplicationWindow {
 
             Controls.Label {
                 text: qsTr("Total in: %1 Mbps").arg(controller.aggregateMbps)
+            }
+
+            Kirigami.Separator {
+                Layout.fillHeight: true
+                Layout.margins: Kirigami.Units.smallSpacing
+            }
+
+            Controls.Label {
+                text: qsTr("Total out: %1 Mbps").arg(controller.aggregateOutMbps)
             }
         }
     }

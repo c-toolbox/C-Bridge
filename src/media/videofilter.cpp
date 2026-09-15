@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #include "media/videofilter.h"
 
 extern "C" {
@@ -79,33 +86,25 @@ bool VideoFilter::open(const AVFrame *templateFrame, AVRational timeBase,
         return false;
     }
 
-    const QByteArray sourceArgs =
-        u"video_size=%1x%2:pix_fmt=%3:time_base=%4/%5:pixel_aspect=1/1"_s
-            .arg(templateFrame->width)
-            .arg(templateFrame->height)
-            .arg(int(inputFormat))
-            .arg(timeBase.num)
-            .arg(timeBase.den)
-            .toUtf8();
-
-    int ret = avfilter_graph_create_filter(&m_source, avfilter_get_by_name("buffer"),
-                                           "in", sourceArgs.constData(), nullptr, m_graph.get());
-    if (ret < 0) {
+    // Allocated uninitialised: buffersrc rejects a hardware pix_fmt until
+    // hw_frames_ctx is attached, which only av_buffersrc_parameters_set can do.
+    m_source = avfilter_graph_alloc_filter(m_graph.get(), avfilter_get_by_name("buffer"), "in");
+    if (!m_source) {
         av_free(parameters);
         if (error) {
-            *error = u"Could not create the filter source: %1"_s.arg(avErrorString(ret));
+            *error = u"Could not allocate the filter source"_s;
         }
         close();
         return false;
     }
 
-    // The hardware frames context must reach buffersrc or scale_cuda cannot bind.
     parameters->format = inputFormat;
     parameters->width = templateFrame->width;
     parameters->height = templateFrame->height;
     parameters->time_base = timeBase;
+    parameters->sample_aspect_ratio = AVRational { 1, 1 };
     parameters->hw_frames_ctx = templateFrame->hw_frames_ctx;
-    ret = av_buffersrc_parameters_set(m_source, parameters);
+    int ret = av_buffersrc_parameters_set(m_source, parameters);
     av_free(parameters);
     if (ret < 0) {
         if (error) {
@@ -115,22 +114,45 @@ bool VideoFilter::open(const AVFrame *templateFrame, AVRational timeBase,
         return false;
     }
 
-    ret = avfilter_graph_create_filter(&m_sink, avfilter_get_by_name("buffersink"),
-                                       "out", nullptr, nullptr, m_graph.get());
+    ret = avfilter_init_str(m_source, nullptr);
     if (ret < 0) {
         if (error) {
-            *error = u"Could not create the filter sink: %1"_s.arg(avErrorString(ret));
+            *error = u"Could not initialise the filter source: %1"_s.arg(avErrorString(ret));
+        }
+        close();
+        return false;
+    }
+
+    // Allocated uninitialised as well: buffersink only accepts its format list
+    // before init, and FFmpeg 7+ renamed the option to "pixel_formats".
+    m_sink = avfilter_graph_alloc_filter(m_graph.get(), avfilter_get_by_name("buffersink"), "out");
+    if (!m_sink) {
+        if (error) {
+            *error = u"Could not allocate the filter sink"_s;
         }
         close();
         return false;
     }
 
     const AVPixelFormat sinkFormats[] = { outputFormat, AV_PIX_FMT_NONE };
-    ret = av_opt_set_int_list(m_sink, "pix_fmts", sinkFormats, AV_PIX_FMT_NONE,
-                              AV_OPT_SEARCH_CHILDREN);
+    ret = av_opt_set(m_sink, "pixel_formats", av_get_pix_fmt_name(outputFormat),
+                     AV_OPT_SEARCH_CHILDREN);
+    if (ret < 0) {
+        ret = av_opt_set_int_list(m_sink, "pix_fmts", sinkFormats, AV_PIX_FMT_NONE,
+                                  AV_OPT_SEARCH_CHILDREN);
+    }
     if (ret < 0) {
         if (error) {
             *error = u"Could not constrain the sink format: %1"_s.arg(avErrorString(ret));
+        }
+        close();
+        return false;
+    }
+
+    ret = avfilter_init_str(m_sink, nullptr);
+    if (ret < 0) {
+        if (error) {
+            *error = u"Could not initialise the filter sink: %1"_s.arg(avErrorString(ret));
         }
         close();
         return false;

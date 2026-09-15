@@ -1,6 +1,16 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #include "models/streamlistmodel.h"
 
 #include "core/bridgeengine.h"
+
+#include <QVariantList>
+#include <QVariantMap>
 
 using namespace Qt::Literals::StringLiterals;
 
@@ -55,6 +65,29 @@ QVariant StreamListModel::data(const QModelIndex &index, int role) const
         }
         return descriptions.join(u", "_s);
     }
+    case SinkStatsRole: {
+        const QList<SinkStats> live = m_engine ? m_engine->sinkStatsFor(stream.id) : QList<SinkStats> {};
+        QVariantList rows;
+        // Falls back to the configured sinks so a stopped stream still lists them.
+        if (live.isEmpty()) {
+            for (const SinkConfig &sink : stream.sinks) {
+                rows.append(QVariantMap {
+                    { u"description"_s, sink.describe() },
+                    { u"open"_s, false },
+                    { u"mbps"_s, u"0.00"_s },
+                });
+            }
+            return rows;
+        }
+        for (const SinkStats &sink : live) {
+            rows.append(QVariantMap {
+                { u"description"_s, sink.description },
+                { u"open"_s, sink.open },
+                { u"mbps"_s, QString::number(sink.outputMbps, 'f', 2) },
+            });
+        }
+        return rows;
+    }
     case StateRole:
         return CBridge::toString(stats.state);
     case ResolutionRole:
@@ -84,6 +117,7 @@ QHash<int, QByteArray> StreamListModel::roleNames() const
         { EnabledRole, "enabled" },
         { SourceUrlRole, "sourceUrl" },
         { SinksRole, "sinks" },
+        { SinkStatsRole, "sinkStats" },
         { StateRole, "state" },
         { ResolutionRole, "resolution" },
         { CodecRole, "codec" },
@@ -104,6 +138,7 @@ void StreamListModel::refreshStats()
     static const QList<int> liveRoles {
         StateRole, ResolutionRole, CodecRole, MbpsRole,
         DroppedRole, QueueDepthRole, ReconnectsRole, LastErrorRole,
+        SinkStatsRole,
     };
 
     Q_EMIT dataChanged(index(0), index(int(m_streams.size()) - 1), liveRoles);

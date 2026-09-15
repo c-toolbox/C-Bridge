@@ -13,11 +13,6 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build",
       "installDir": "${sourceDir}/../install",
-      "cacheVariables": {
-        "CMAKE_PREFIX_PATH": "D:/Craft/VS2022_qt6X",
-        "CBRIDGE_FFMPEG_ROOT": "D:/FFmpeg/mas2026/local64",
-        "CBRIDGE_FFMPEG_LIBDIR_NAME": "bin-video"
-      },
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",

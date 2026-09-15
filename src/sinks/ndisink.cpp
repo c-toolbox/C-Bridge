@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #include "sinks/ndisink.h"
 
 #include "ndi/ndiruntime.h"
@@ -84,6 +91,9 @@ bool NdiSink::open(const StreamFormat &format, QString *error)
     m_videoOffset = 0;
     m_ptsBase = -1;
     m_filterReady = false;
+    m_filterFailed = false;
+    m_audioFailureLogged = false;
+    m_open = true;
 
     // The sender is created lazily: the real frame size is only known once the
     // first frame has been decoded and filtered.
@@ -169,6 +179,8 @@ void NdiSink::close()
     m_senderWidth = 0;
     m_senderHeight = 0;
     m_filterReady = false;
+    m_filterFailed = false;
+    m_open = false;
 }
 
 bool NdiSink::writeVideo(const std::uint8_t *data, std::size_t size,
@@ -208,11 +220,15 @@ bool NdiSink::writeVideo(const std::uint8_t *data, std::size_t size,
 void NdiSink::onDecodedVideo(AVFrame *frame)
 {
     if (!m_filterReady) {
+        if (m_filterFailed) {
+            return;
+        }
         QString error;
         if (!m_videoFilter.open(frame, AVRational { 1, kRtpVideoClock },
                                 m_config.targetWidth, m_config.targetHeight,
                                 m_config.fpsNum, m_config.fpsDen,
                                 AV_PIX_FMT_UYVY422, &error)) {
+            m_filterFailed = true;
             qWarning("NDI sink %s: %s", qUtf8Printable(describe()), qUtf8Printable(error));
             return;
         }
@@ -279,13 +295,15 @@ void NdiSink::onFilteredVideo(AVFrame *frame)
 bool NdiSink::writeAudio(const std::uint8_t *data, std::size_t size,
                          std::uint32_t rtpTimestamp)
 {
-    if (!m_audioDecoder.isOpen() || size == 0) {
+    if (!m_audioDecoder.isOpen() || size == 0 || m_audioFailureLogged) {
         return false;
     }
 
     QString error;
     if (!m_audioDecoder.decode(data, size, std::int64_t(rtpTimestamp), &error)) {
-        qWarning("NDI sink %s: %s", qUtf8Printable(describe()), qUtf8Printable(error));
+        m_audioFailureLogged = true;
+        qWarning("NDI sink %s: audio disabled after a decode failure: %s",
+                 qUtf8Printable(describe()), qUtf8Printable(error));
         return false;
     }
     return true;

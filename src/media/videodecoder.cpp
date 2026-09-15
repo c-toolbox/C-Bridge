@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #include "media/videodecoder.h"
 
 #include "media/cudacontext.h"

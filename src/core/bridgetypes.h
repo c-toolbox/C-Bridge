@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #pragma once
 
 #include <QMetaType>
@@ -44,6 +51,14 @@ SinkKind sinkKindFromString(const QString &text, bool *ok = nullptr);
 
 QString toString(StreamState state);
 
+/// Per-sink counters sampled alongside StreamStats.
+struct SinkStats {
+    QString description;
+    bool open = false;
+    quint64 bytesWritten = 0;
+    double outputMbps = 0.0;
+};
+
 /// Per-stream counters sampled by the engine once a second for the UI.
 struct StreamStats {
     StreamState state = StreamState::Idle;
@@ -71,3 +86,4 @@ struct StreamStats {
 } // namespace CBridge
 
 Q_DECLARE_METATYPE(CBridge::StreamStats)
+Q_DECLARE_METATYPE(CBridge::SinkStats)

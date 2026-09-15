@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #pragma once
 
 #include "config/bridgeconfig.h"
@@ -5,6 +12,7 @@
 #include "core/mediaqueue.h"
 #include "media/bitstreaminspector.h"
 
+#include <QList>
 #include <QObject>
 #include <QTimer>
 
@@ -40,6 +48,7 @@ public:
     void stop();
 
     StreamStats stats() const;
+    QList<SinkStats> sinkStats() const;
 
 Q_SIGNALS:
     void stateChanged(const QString &streamId, CBridge::StreamState state);
@@ -53,6 +62,7 @@ private:
     void closeSinks();
     void scheduleReconnect();
     void setState(StreamState state);
+    void updateSinkStats();
 
     StreamConfig m_config;
     QString m_password;
@@ -68,11 +78,18 @@ private:
     bool m_sinksOpen = false;
     bool m_sawKeyframe = false;
 
+    /// SPS/PPS arrive as their own access units, which are dropped before the first
+    /// keyframe, so they are cached and prepended to every keyframe that lacks them.
+    std::vector<std::uint8_t> m_parameterSets;
+    bool m_parameterSetsConsumed = false;
+    std::vector<std::uint8_t> m_assembledUnit;
+
     QTimer *m_reconnectTimer = nullptr;
     int m_reconnectDelayMs = 0;
 
     mutable std::mutex m_statsMutex;
     StreamStats m_stats;
+    QList<SinkStats> m_sinkStats;
 };
 
 } // namespace CBridge

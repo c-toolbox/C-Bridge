@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #include "core/streampipeline.h"
 
 #include "sinks/streamsink.h"
@@ -56,6 +63,29 @@ StreamStats StreamPipeline::stats() const
     return copy;
 }
 
+QList<SinkStats> StreamPipeline::sinkStats() const
+{
+    std::lock_guard lock(m_statsMutex);
+    return m_sinkStats;
+}
+
+// Snapshots the sinks, which only their owning thread may touch, into a locked copy.
+void StreamPipeline::updateSinkStats()
+{
+    QList<SinkStats> snapshot;
+    snapshot.reserve(int(m_sinks.size()));
+    for (const auto &sink : m_sinks) {
+        SinkStats entry;
+        entry.description = sink->describe();
+        entry.open = sink->isOpen();
+        entry.bytesWritten = sink->bytesWritten();
+        snapshot.append(entry);
+    }
+
+    std::lock_guard lock(m_statsMutex);
+    m_sinkStats = std::move(snapshot);
+}
+
 void StreamPipeline::start()
 {
     if (m_running.exchange(true, std::memory_order_relaxed)) {
@@ -64,6 +94,8 @@ void StreamPipeline::start()
 
     m_sawKeyframe = false;
     m_sinksOpen = false;
+    m_parameterSets.clear();
+    m_parameterSetsConsumed = false;
     m_reconnectDelayMs = m_config.reconnectInitialMs;
 
     for (const SinkConfig &sinkConfig : m_config.sinks) {
@@ -91,6 +123,8 @@ void StreamPipeline::start()
         m_running.store(false, std::memory_order_relaxed);
         return;
     }
+
+    updateSinkStats();
 
     m_worker = std::thread([this] { workerLoop(); });
 
@@ -150,6 +184,8 @@ void StreamPipeline::scheduleReconnect()
 
     closeSinks();
     m_sawKeyframe = false;
+    m_parameterSets.clear();
+    m_parameterSetsConsumed = false;
 
     {
         std::lock_guard lock(m_statsMutex);
@@ -186,6 +222,11 @@ void StreamPipeline::stop()
     closeSinks();
     m_sinks.clear();
 
+    {
+        std::lock_guard lock(m_statsMutex);
+        m_sinkStats.clear();
+    }
+
     setState(StreamState::Idle);
 }
 
@@ -194,6 +235,8 @@ bool StreamPipeline::openSinks()
     StreamFormat format;
     format.videoCodec = m_source ? m_source->negotiatedVideoCodec() : VideoCodec::Unknown;
     format.hasAudio = m_config.audioEnabled;
+    format.videoExtradata = QByteArray(reinterpret_cast<const char *>(m_parameterSets.data()),
+                                       qsizetype(m_parameterSets.size()));
 
     {
         std::lock_guard lock(m_statsMutex);
@@ -216,6 +259,7 @@ bool StreamPipeline::openSinks()
     }
 
     m_sinksOpen = anyOpen;
+    updateSinkStats();
     return anyOpen;
 }
 
@@ -225,6 +269,7 @@ void StreamPipeline::closeSinks()
         sink->close();
     }
     m_sinksOpen = false;
+    updateSinkStats();
 }
 
 void StreamPipeline::handleVideoUnit(const MediaUnit &unit)
@@ -232,15 +277,28 @@ void StreamPipeline::handleVideoUnit(const MediaUnit &unit)
     const BitstreamInspector::Result info =
         m_inspector.inspect(unit.payload.data(), unit.payload.size());
 
+    if (info.hasParameterSets) {
+        std::vector<std::uint8_t> sets = BitstreamInspector::extractParameterSets(
+            m_inspector.codec(), unit.payload.data(), unit.payload.size());
+        if (!sets.empty()) {
+            if (m_parameterSetsConsumed) {
+                m_parameterSets.clear();
+                m_parameterSetsConsumed = false;
+            }
+            m_parameterSets.insert(m_parameterSets.end(), sets.begin(), sets.end());
+        }
+    }
+
     if (info.width > 0 && info.height > 0) {
         std::lock_guard lock(m_statsMutex);
         m_stats.width = info.width;
         m_stats.height = info.height;
     }
 
-    // Muxers need the parameter sets, so hold everything until the first keyframe.
+    // Sinks need the parameter sets, not a resolution: FFmpeg's parser only reports
+    // width one access unit late, which would drop the very keyframe that carries them.
     if (!m_sawKeyframe) {
-        if (!info.isKeyframe || info.width == 0) {
+        if (!info.isKeyframe || m_parameterSets.empty()) {
             return;
         }
         m_sawKeyframe = true;
@@ -249,12 +307,29 @@ void StreamPipeline::handleVideoUnit(const MediaUnit &unit)
         }
     }
 
+    const std::uint8_t *payload = unit.payload.data();
+    std::size_t payloadSize = unit.payload.size();
+    if (info.isKeyframe && !info.hasParameterSets && !m_parameterSets.empty()) {
+        m_assembledUnit.clear();
+        m_assembledUnit.reserve(m_parameterSets.size() + unit.payload.size());
+        m_assembledUnit.insert(m_assembledUnit.end(),
+                               m_parameterSets.begin(), m_parameterSets.end());
+        m_assembledUnit.insert(m_assembledUnit.end(),
+                               unit.payload.begin(), unit.payload.end());
+        payload = m_assembledUnit.data();
+        payloadSize = m_assembledUnit.size();
+        m_parameterSetsConsumed = true;
+    } else if (info.isKeyframe) {
+        m_parameterSetsConsumed = true;
+    }
+
     for (auto &sink : m_sinks) {
         if (sink->isOpen()) {
-            sink->writeVideo(unit.payload.data(), unit.payload.size(),
-                             unit.rtpTimestamp, info.isKeyframe);
+            sink->writeVideo(payload, payloadSize, unit.rtpTimestamp, info.isKeyframe);
         }
     }
+
+    updateSinkStats();
 
     std::lock_guard lock(m_statsMutex);
     ++m_stats.videoFramesIn;

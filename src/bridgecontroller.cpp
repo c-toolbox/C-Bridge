@@ -1,10 +1,19 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #include "bridgecontroller.h"
 
 #include "core/bridgeengine.h"
 #include "models/streamlistmodel.h"
+#include "ndi/ndiruntime.h"
 
 #include <QFileInfo>
 #include <QSettings>
+#include <QUuid>
 
 using namespace Qt::Literals::StringLiterals;
 
@@ -19,8 +28,11 @@ BridgeController::BridgeController(QObject *parent)
     : QObject(parent)
     , m_engine(new BridgeEngine(this))
     , m_model(new StreamListModel(this))
+    , m_draft(new StreamDraft(this))
 {
     m_model->setEngine(m_engine);
+
+    connect(m_draft, &StreamDraft::changed, this, &BridgeController::recomputeDraftProblems);
 
     connect(m_engine, &BridgeEngine::statsUpdated, this, [this] {
         m_model->refreshStats();
@@ -55,6 +67,39 @@ bool BridgeController::isRunning() const
 QString BridgeController::aggregateMbps() const
 {
     return QString::number(m_engine->aggregateInputMbps(), 'f', 1);
+}
+
+QString BridgeController::aggregateOutMbps() const
+{
+    return QString::number(m_engine->aggregateOutputMbps(), 'f', 1);
+}
+
+bool BridgeController::isNdiAvailable() const
+{
+#ifdef CBRIDGE_NDI_SUPPORT
+    return NdiRuntime::instance().ensureLoaded();
+#else
+    return false;
+#endif
+}
+
+QString BridgeController::ndiStatus() const
+{
+#ifdef CBRIDGE_NDI_SUPPORT
+    NdiRuntime &runtime = NdiRuntime::instance();
+    if (runtime.ensureLoaded()) {
+        return u"NDI runtime %1"_s.arg(runtime.version());
+    }
+    const QString error = runtime.lastError();
+    return error.isEmpty() ? u"The NDI runtime could not be loaded."_s : error;
+#else
+    return u"This build was compiled without NDI support."_s;
+#endif
+}
+
+QStringList BridgeController::sinkKindNames() const
+{
+    return { CBridge::toString(SinkKind::TsMulticast), CBridge::toString(SinkKind::Ndi) };
 }
 
 void BridgeController::setStatusMessage(const QString &message)
@@ -192,22 +237,115 @@ void BridgeController::stopStream(const QString &streamId)
 
 void BridgeController::addStream(const QString &name, const QString &whepUrl)
 {
-    StreamConfig stream = StreamConfig::createDefault();
+    beginEditStream({});
     if (!name.isEmpty()) {
-        stream.name = name;
+        m_draft->setName(name);
     }
-    stream.whepUrl = QUrl(whepUrl);
+    m_draft->setWhepUrl(whepUrl);
+    commitEdit();
+}
 
-    // Give every new stream a working multicast sink so it is runnable immediately.
-    SinkConfig sink;
-    sink.kind = SinkKind::TsMulticast;
-    sink.ts = m_config.suggestMulticastEndpoint();
-    stream.sinks.append(sink);
+void BridgeController::beginEditStream(const QString &streamId)
+{
+    const int index = m_config.indexOfStream(streamId);
+    m_draftIsNew = index < 0;
 
-    m_config.streams.append(stream);
+    if (!m_draftIsNew) {
+        m_draft->load(m_config.streams.at(index));
+    } else {
+        StreamConfig stream = StreamConfig::createDefault();
+        // A new stream is runnable immediately rather than failing on "no sink".
+        SinkConfig sink;
+        sink.kind = SinkKind::TsMulticast;
+        sink.ts = m_config.suggestMulticastEndpoint();
+        stream.sinks.append(sink);
+        m_draft->load(stream);
+    }
+
+    recomputeDraftProblems();
+    Q_EMIT draftProblemsChanged();
+}
+
+bool BridgeController::commitEdit()
+{
+    StreamConfig edited = m_draft->toConfig();
+    if (edited.id.isEmpty()) {
+        edited.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
+
+    const QStringList problems = m_config.validateStream(edited, edited.id);
+    if (!problems.isEmpty()) {
+        m_draftProblems = problems;
+        Q_EMIT draftProblemsChanged();
+        setStatusMessage(problems.first());
+        return false;
+    }
+
+    const int index = m_config.indexOfStream(edited.id);
+    const bool wasRunning = m_engine->isStreamRunning(edited.id);
+
+    if (index >= 0) {
+        m_engine->stopStream(edited.id);
+        m_config.streams[index] = edited;
+    } else {
+        m_config.streams.append(edited);
+    }
+
     refreshModel();
     setDirty(true);
     Q_EMIT configChanged();
+
+    if (wasRunning && edited.enabled) {
+        m_engine->setConfig(m_config);
+        m_engine->startStream(edited.id);
+        Q_EMIT runningChanged();
+    }
+
+    setStatusMessage(u"Saved stream \"%1\""_s.arg(edited.name));
+    return true;
+}
+
+void BridgeController::cancelEdit()
+{
+    m_draft->load(StreamConfig::createDefault());
+    m_draftProblems.clear();
+    Q_EMIT draftProblemsChanged();
+}
+
+void BridgeController::suggestMulticastFor(int sinkRow)
+{
+    SinkListModel *sinks = m_draft->sinks();
+    if (sinkRow < 0 || sinkRow >= sinks->rowCount()) {
+        return;
+    }
+
+    // Excludes the stream being edited so it can reuse its own current endpoint.
+    BridgeConfig scratch = m_config;
+    const int index = scratch.indexOfStream(m_draft->streamId());
+    if (index >= 0) {
+        scratch.streams.removeAt(index);
+    }
+    scratch.streams.append(m_draft->toConfig());
+
+    const TsMulticastSinkConfig suggestion = scratch.suggestMulticastEndpoint();
+    const QModelIndex row = sinks->index(sinkRow);
+    sinks->setData(row, suggestion.groupAddress, SinkListModel::GroupAddressRole);
+    sinks->setData(row, int(suggestion.port), SinkListModel::PortRole);
+}
+
+void BridgeController::recomputeDraftProblems()
+{
+    const StreamConfig candidate = m_draft->toConfig();
+    QStringList problems = m_config.validateStream(candidate, candidate.id);
+    if (candidate.name.trimmed().isEmpty()) {
+        problems.prepend(u"The stream needs a name."_s);
+    }
+
+    if (m_draftProblems == problems) {
+        return;
+    }
+    m_draftProblems = problems;
+    Q_EMIT draftProblemsChanged();
 }
 
 void BridgeController::removeStream(const QString &streamId)

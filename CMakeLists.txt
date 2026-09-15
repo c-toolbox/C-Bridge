@@ -56,6 +56,14 @@ endif()
 set(QT_MIN_VERSION 6.6.0)
 set(KF6_MIN_VERSION 6.0.0)
 
+# Machine-specific locations come from the environment so no paths need to be
+# committed: point CBRIDGE_CRAFT_ROOT at a Craft install providing Qt/KF6. An explicit
+# -DCMAKE_PREFIX_PATH=... always takes precedence.
+if(NOT CMAKE_PREFIX_PATH AND DEFINED ENV{CBRIDGE_CRAFT_ROOT})
+  file(TO_CMAKE_PATH "$ENV{CBRIDGE_CRAFT_ROOT}" _cbridge_craft_root)
+  set(CMAKE_PREFIX_PATH "${_cbridge_craft_root}")
+endif()
+
 find_package(ECM ${KF6_MIN_VERSION} REQUIRED NO_MODULE)
 list(APPEND CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 

@@ -11,6 +11,10 @@ qt_add_executable(${TARGET_NAME}
 
   models/streamlistmodel.cpp
   models/streamlistmodel.h
+  models/sinklistmodel.cpp
+  models/sinklistmodel.h
+  models/streamdraft.cpp
+  models/streamdraft.h
 
   core/bridgetypes.cpp
   core/bridgetypes.h
@@ -71,6 +75,10 @@ qt_add_qml_module(${TARGET_NAME}
   VERSION 1.0
   QML_FILES
     Main.qml
+    StreamEditorPage.qml
+    SinkCard.qml
+    TsSinkForm.qml
+    NdiSinkForm.qml
 )
 
 # Same as C-Slice: with a shared Qt build the imported QML plugins are loaded from

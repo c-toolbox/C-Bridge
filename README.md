@@ -10,8 +10,8 @@ fans them out to pluggable sinks:
 
 | Dependency | Where |
 | --- | --- |
-| Qt 6.6+ and KDE Frameworks 6 | KDE Craft, e.g. `D:/Craft/VS2022_qt6X` |
-| FFmpeg 8.1 | e.g. `D:/FFmpeg/mas2026/local64` (headers in `include/`, libs and DLLs in `bin-video/`) |
+| Qt 6.6+ and KDE Frameworks 6 | A KDE Craft install, passed via `CMAKE_PREFIX_PATH` |
+| FFmpeg 8.1 | A local build tree passed via `CBRIDGE_FFMPEG_ROOT` (headers in `include/`, libs and DLLs in `bin-video/`) |
 | libdatachannel | vcpkg, **with the `srtp` feature** |
 | NDI 6 SDK | `NDI_SDK_DIR` environment variable (optional) |
 
@@ -27,13 +27,12 @@ vcpkg install "libdatachannel[core,ws,srtp]:x64-windows" --recurse
 Without the `srtp` feature the package exports `RTC_ENABLE_MEDIA=0` and the build
 fails with "`H264RtpDepacketizer` is not a member of `rtc`".
 
-vcpkg is used in **classic mode** on purpose — there is no `vcpkg.json`, so the
-already-installed `x64-windows` tree is reused instead of being rebuilt per project.
-
 ## Building
 
-Paths are set in `CMakePresets.json`; override `CMAKE_PREFIX_PATH` and
-`CBRIDGE_FFMPEG_ROOT` there if your layout differs.
+Machine-specific locations come from the environment, so no paths are committed: set
+`CBRIDGE_CRAFT_ROOT` to your Craft install (providing Qt/KF6) and `CBRIDGE_FFMPEG_ROOT`
+to your FFmpeg build tree. An explicit `-DCMAKE_PREFIX_PATH=... -DCBRIDGE_FFMPEG_ROOT=...`
+always takes precedence.
 
 ```powershell
 cmake --preset windows-msvc
@@ -71,17 +70,18 @@ cmake --build build --target INSTALL --config RelWithDebInfo
 ## Running
 
 ```powershell
-C-Bridge.exe --config data\configs\localtest.cbridge.json --autostart
+C-Bridge.exe --config data\configs\example.cbridge.json --autostart
 ```
 
-Configurations are JSON documents listing streams and their sinks. Application
+Configurations are JSON documents listing streams and their sinks; the shipped
+`data/configs/example.cbridge.json` is an empty template to start from. Application
 preferences (last config, auto-load) use `QSettings`.
 
 Receive a multicast sink with mpv — the low-latency flags matter, since an untuned
 receiver buffers enough to erase the latency advantage:
 
 ```powershell
-mpv udp://239.1.1.1:5000 --profile=low-latency --cache=no --demuxer-lavf-o=fflags=+nobuffer
+mpv udp://<multicast-group>:<port> --profile=low-latency --cache=no --demuxer-lavf-o=fflags=+nobuffer
 ```
 
 ## Layout

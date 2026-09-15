@@ -1,9 +1,17 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #pragma once
 
 #include "core/bridgetypes.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 struct AVCodecContext;
 struct AVCodecParserContext;
@@ -21,6 +29,8 @@ class BitstreamInspector
 public:
     struct Result {
         bool isKeyframe = false;
+        /// True when this access unit itself carries SPS/PPS (and VPS for HEVC).
+        bool hasParameterSets = false;
         int width = 0;
         int height = 0;
     };
@@ -34,7 +44,14 @@ public:
     bool init(VideoCodec codec);
     void reset();
 
+    VideoCodec codec() const { return m_codec; }
+
     Result inspect(const std::uint8_t *data, std::size_t size);
+
+    /// Returns just the SPS/PPS (and VPS for HEVC) NAL units, start codes included.
+    static std::vector<std::uint8_t> extractParameterSets(VideoCodec codec,
+                                                          const std::uint8_t *data,
+                                                          std::size_t size);
 
     /// True when an SPS (and for HEVC a VPS) has been seen, meaning a decoder or
     /// muxer downstream has enough to start.

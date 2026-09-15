@@ -17,8 +17,23 @@
 
 include(FindPackageHandleStandardArgs)
 
-set(CBRIDGE_FFMPEG_ROOT "D:/FFmpeg/mas2026/local64"
-    CACHE PATH "Root of the FFmpeg 8.1 build tree (contains include/ and bin-video/)")
+# Default to the CBRIDGE_FFMPEG_ROOT environment variable so no machine-specific path
+# needs to be committed; an explicit -DCBRIDGE_FFMPEG_ROOT=... always takes precedence.
+if(DEFINED ENV{CBRIDGE_FFMPEG_ROOT})
+  file(TO_CMAKE_PATH "$ENV{CBRIDGE_FFMPEG_ROOT}" _cbridge_ffmpeg_root_default)
+else()
+  set(_cbridge_ffmpeg_root_default "")
+endif()
+
+set(CBRIDGE_FFMPEG_ROOT "${_cbridge_ffmpeg_root_default}"
+    CACHE PATH "Root of the FFmpeg build tree (contains include/ and a library directory)")
+
+if(NOT CBRIDGE_FFMPEG_ROOT)
+  message(FATAL_ERROR
+    "CBRIDGE_FFMPEG_ROOT is not set. Point it at an FFmpeg build tree that contains "
+    "include/ and a library directory, e.g. -DCBRIDGE_FFMPEG_ROOT=<path> or by setting "
+    "the CBRIDGE_FFMPEG_ROOT environment variable.")
+endif()
 
 set(CBRIDGE_FFMPEG_LIBDIR_NAME "bin-video"
     CACHE STRING "Directory under CBRIDGE_FFMPEG_ROOT holding the import libs and DLLs")

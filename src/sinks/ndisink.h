@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #pragma once
 
 #include "config/bridgeconfig.h"
@@ -30,7 +37,9 @@ public:
 
     bool open(const StreamFormat &format, QString *error) override;
     void close() override;
-    bool isOpen() const override { return m_sender != nullptr; }
+    /// True once the decode chain is up. The NDI sender itself is created lazily from
+    /// the first decoded frame, so it cannot gate the media that would produce it.
+    bool isOpen() const override { return m_open; }
 
     bool writeVideo(const std::uint8_t *data, std::size_t size,
                     std::uint32_t rtpTimestamp, bool isKeyframe) override;
@@ -57,11 +66,14 @@ private:
     NDIlib_send_instance_type *m_sender = nullptr;
     int m_senderWidth = 0;
     int m_senderHeight = 0;
+    bool m_open = false;
 
     VideoDecoder m_videoDecoder;
     VideoFilter m_videoFilter;
     AudioDecoder m_audioDecoder;
     bool m_filterReady = false;
+    bool m_filterFailed = false;
+    bool m_audioFailureLogged = false;
 
     /// Async sends read from the buffer until the following send returns, so two
     /// buffers alternate and neither is overwritten while in flight.

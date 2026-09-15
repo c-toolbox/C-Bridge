@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #pragma once
 
 #include "core/bridgetypes.h"
@@ -103,6 +110,10 @@ public:
     /// Returns human-readable problems that would break a run: duplicate multicast
     /// endpoints, duplicate NDI names, malformed addresses, streams without sinks.
     QStringList validate() const;
+
+    /// The same rules for a single stream, ignoring excludeId so an edited stream
+    /// never conflicts with the copy still stored here.
+    QStringList validateStream(const StreamConfig &candidate, const QString &excludeId) const;
 
     int indexOfStream(const QString &id) const;
 

@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #include "bridgeapplication.h"
 
 #include "bridgecontroller.h"
@@ -170,8 +177,10 @@ int BridgeApplication::run()
     parser.addHelpOption();
     parser.addVersionOption();
 
+    // Not "--config": KConfig claims that switch for its own main config file and
+    // KColorSchemeManager would overwrite the named file with [UiSettings].
     const QCommandLineOption configOption(
-        { u"c"_s, u"config"_s },
+        { u"c"_s, u"stream-config"_s },
         i18n("Configuration file to load at startup."),
         u"path"_s);
     parser.addOption(configOption);

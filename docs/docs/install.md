@@ -39,7 +39,7 @@ working; only NDI sinks report an error. Install the redistributable from
 ## First run
 
 ```powershell
-C-Bridge.exe --config data\configs\localtest.cbridge.json
+C-Bridge.exe --config data\configs\example.cbridge.json
 ```
 
 | Option | Effect |

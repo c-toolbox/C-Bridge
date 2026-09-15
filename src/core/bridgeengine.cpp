@@ -1,3 +1,10 @@
+/*
+ * SPDX-FileCopyrightText:
+ * 2026 Erik Sundén
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 #include "core/bridgeengine.h"
 
 #include "core/streampipeline.h"
@@ -31,6 +38,7 @@ void BridgeEngine::setConfig(const BridgeConfig &config)
     m_config = config;
     m_stats.clear();
     m_lastBytesIn.clear();
+    m_sinkStats.clear();
 }
 
 void BridgeEngine::startAll()
@@ -75,6 +83,8 @@ void BridgeEngine::stopStream(const QString &streamId)
     pipeline->stop();
     pipeline->deleteLater();
 
+    m_sinkStats.remove(streamId);
+
     if (m_pipelines.isEmpty()) {
         m_statsTimer->stop();
     }
@@ -101,6 +111,21 @@ void BridgeEngine::sampleStats()
         m_lastBytesIn.insert(it.key(), stats.bytesIn);
 
         stats.inputMbps = (double(delta) * 8.0) / (intervalSeconds * 1'000'000.0);
+
+        QList<SinkStats> sinks = it.value()->sinkStats();
+        const QList<SinkStats> previousSinks = m_sinkStats.value(it.key());
+        double streamOutputMbps = 0.0;
+        for (int i = 0; i < sinks.size(); ++i) {
+            const quint64 before = i < previousSinks.size() ? previousSinks.at(i).bytesWritten
+                                                            : sinks.at(i).bytesWritten;
+            const quint64 sinkDelta =
+                sinks.at(i).bytesWritten >= before ? sinks.at(i).bytesWritten - before : 0;
+            sinks[i].outputMbps = (double(sinkDelta) * 8.0) / (intervalSeconds * 1'000'000.0);
+            streamOutputMbps += sinks.at(i).outputMbps;
+        }
+        m_sinkStats.insert(it.key(), sinks);
+
+        stats.outputMbps = streamOutputMbps;
         m_stats.insert(it.key(), stats);
     }
 
@@ -112,11 +137,25 @@ StreamStats BridgeEngine::statsFor(const QString &streamId) const
     return m_stats.value(streamId);
 }
 
+QList<SinkStats> BridgeEngine::sinkStatsFor(const QString &streamId) const
+{
+    return m_sinkStats.value(streamId);
+}
+
 double BridgeEngine::aggregateInputMbps() const
 {
     double total = 0.0;
     for (const StreamStats &stats : m_stats) {
         total += stats.inputMbps;
+    }
+    return total;
+}
+
+double BridgeEngine::aggregateOutputMbps() const
+{
+    double total = 0.0;
+    for (const StreamStats &stats : m_stats) {
+        total += stats.outputMbps;
     }
     return total;
 }

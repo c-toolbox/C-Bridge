@@ -8,6 +8,7 @@ const config: Config = {
   title: 'C-Bridge Documentation',
   tagline:
     'Bridge WebRTC streams to MPEG-TS multicast and NDI at scale',
+  favicon: 'img/favicon.ico',
 
   future: {
     v4: true,
@@ -68,11 +69,16 @@ const config: Config = {
   ],
 
   themeConfig: {
+    image: 'img/logo.png',
     colorMode: {
       respectPrefersColorScheme: true,
     },
     navbar: {
       title: 'C-Bridge',
+      logo: {
+        alt: 'C-Bridge',
+        src: 'img/logo.png',
+      },
       items: [
         {
           type: 'docSidebar',
@@ -122,7 +128,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} C-Toolbox.`,
+      copyright: `Copyright © ${new Date().getFullYear()} Erik Sundén. Distributed under the <a href="https://github.com/c-toolbox/C-Bridge/blob/master/LICENSE.txt">GNU General Public License v3.0</a>.`,
     },
     prism: {
       theme: prismThemes.github,
