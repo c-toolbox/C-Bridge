@@ -8,6 +8,7 @@
 #include "bridgeapplication.h"
 
 #include "bridgecontroller.h"
+#include "cbridgesettings.h"
 #include "cbridgeversion.h"
 #include "ndi/ndiruntime.h"
 
@@ -28,6 +29,7 @@
 #include <QMutexLocker>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlEngine>
 #include <QQuickStyle>
 #include <QTextStream>
 
@@ -193,6 +195,12 @@ int BridgeApplication::run()
 
     m_controller = new BridgeController(this);
     m_engine->rootContext()->setContextProperty(u"controller"_s, m_controller);
+
+    // Expose the KConfig singleton to QML so the preferences dialog can read and write it
+    // directly, same as C-Slice's SliceSettings.
+    qmlRegisterSingletonInstance("org.ctoolbox.cbridge", 1, 0, "CBridgeSettings",
+                                 CBridgeSettings::self());
+
     m_controller->loadStartupConfig(parser.value(configOption));
 
     m_engine->loadFromModule(u"org.ctoolbox.cbridge"_s, u"Main"_s);

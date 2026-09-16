@@ -56,6 +56,11 @@ Kirigami.ApplicationWindow {
         onAccepted: controller.removeStream(streamId)
     }
 
+    SettingsDialog {
+        id: settingsDialog
+        controller: controller
+    }
+
     Component {
         id: editorPage
         StreamEditorPage {}
@@ -79,6 +84,11 @@ Kirigami.ApplicationWindow {
                 text: qsTr("Save")
                 icon.name: "document-save"
                 onTriggered: saveDialog.open()
+            },
+            Kirigami.Action {
+                text: qsTr("Settings")
+                icon.name: "configure"
+                onTriggered: settingsDialog.open()
             },
             Kirigami.Action {
                 text: qsTr("Add stream")

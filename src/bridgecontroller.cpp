@@ -7,9 +7,12 @@
 
 #include "bridgecontroller.h"
 
+#include "cbridgesettings.h"
 #include "core/bridgeengine.h"
 #include "models/streamlistmodel.h"
 #include "ndi/ndiruntime.h"
+
+#include <KConfigGroup>
 
 #include <QFileInfo>
 #include <QSettings>
@@ -20,8 +23,19 @@ using namespace Qt::Literals::StringLiterals;
 namespace CBridge {
 
 namespace {
-constexpr auto kLastConfigKey = "lastConfigPath";
-constexpr auto kAutoLoadKey = "autoLoadLastConfig";
+// The last-config path used to live in plain QSettings before preferences moved to
+// KConfig; read it as a fallback so an upgrade does not lose the auto-loaded document.
+constexpr auto kLegacyLastConfigKey = "lastConfigPath";
+
+QString storedLastConfigPath()
+{
+    const QString last = CBridgeSettings::lastConfigPath();
+    if (!last.isEmpty()) {
+        return last;
+    }
+    QSettings settings;
+    return settings.value(QString::fromLatin1(kLegacyLastConfigKey)).toString();
+}
 }
 
 BridgeController::BridgeController(QObject *parent)
@@ -130,19 +144,47 @@ void BridgeController::refreshModel()
 
 void BridgeController::loadStartupConfig(const QString &explicitPath)
 {
-    if (!explicitPath.isEmpty()) {
-        loadConfig(explicitPath);
+    // Resolution order: --stream-config, the configured startup document, then the last
+    // opened one when auto-load is enabled.
+    QString path = explicitPath;
+    if (path.isEmpty()) {
+        const QString configured = CBridgeSettings::configPath();
+        if (!configured.isEmpty() && QFileInfo::exists(configured)) {
+            path = configured;
+        } else if (CBridgeSettings::autoLoadLastConfig()) {
+            const QString last = storedLastConfigPath();
+            if (!last.isEmpty() && QFileInfo::exists(last)) {
+                path = last;
+            }
+        }
+    }
+
+    if (path.isEmpty() || !loadConfig(path)) {
         return;
     }
 
-    QSettings settings;
-    if (!settings.value(QString::fromLatin1(kAutoLoadKey), true).toBool()) {
-        return;
+    startStreamsOnLoad();
+}
+
+void BridgeController::startStreamsOnLoad()
+{
+    // No global validation gate here: the load status already lists document problems and
+    // each stream reports its own error if it cannot run.
+    const bool startAll = CBridgeSettings::startOnLoad();
+
+    m_engine->setConfig(m_config);
+    int started = 0;
+    for (const StreamConfig &stream : m_config.streams) {
+        if (!stream.enabled || !(startAll || streamAutoStart(stream.id))) {
+            continue;
+        }
+        m_engine->startStream(stream.id);
+        ++started;
     }
 
-    const QString last = settings.value(QString::fromLatin1(kLastConfigKey)).toString();
-    if (!last.isEmpty() && QFileInfo::exists(last)) {
-        loadConfig(last);
+    if (started > 0) {
+        setStatusMessage(u"Started %1 stream(s) on load"_s.arg(started));
+        Q_EMIT runningChanged();
     }
 }
 
@@ -174,7 +216,8 @@ bool BridgeController::loadConfig(const QString &path)
     refreshModel();
     setDirty(false);
 
-    QSettings().setValue(QString::fromLatin1(kLastConfigKey), path);
+    CBridgeSettings::setLastConfigPath(path);
+    CBridgeSettings::self()->save();
 
     const QStringList problems = m_config.validate();
     setStatusMessage(problems.isEmpty()
@@ -195,7 +238,8 @@ bool BridgeController::saveConfig(const QString &path)
 
     m_configPath = path;
     setDirty(false);
-    QSettings().setValue(QString::fromLatin1(kLastConfigKey), path);
+    CBridgeSettings::setLastConfigPath(path);
+    CBridgeSettings::self()->save();
     setStatusMessage(u"Saved %1"_s.arg(QFileInfo(path).fileName()));
     Q_EMIT configChanged();
     return true;
@@ -396,6 +440,54 @@ QString BridgeController::tsAddressFor(const QString &streamId) const
 QStringList BridgeController::validationProblems() const
 {
     return m_config.validate();
+}
+
+bool BridgeController::streamAutoStart(const QString &streamId) const
+{
+    KConfigGroup group(CBridgeSettings::self()->config(), u"Streams"_s);
+    return group.readEntry(streamId, false);
+}
+
+QVariantList BridgeController::streamAutoStarts() const
+{
+    QVariantList rows;
+    for (const StreamConfig &stream : m_config.streams) {
+        rows.append(QVariantMap {
+            { u"id"_s, stream.id },
+            { u"name"_s, stream.name },
+            { u"autoStart"_s, streamAutoStart(stream.id) },
+        });
+    }
+    return rows;
+}
+
+void BridgeController::saveStartupSettings(const QString &configPath, bool autoLoadLastConfig,
+                                           bool startOnLoad, const QVariantList &streamRows)
+{
+    CBridgeSettings::setConfigPath(configPath);
+    CBridgeSettings::setAutoLoadLastConfig(autoLoadLastConfig);
+    CBridgeSettings::setStartOnLoad(startOnLoad);
+
+    KConfigGroup group(CBridgeSettings::self()->config(), u"Streams"_s);
+    QStringList current;
+    for (const QVariant &variant : streamRows) {
+        const auto row = variant.toMap();
+        const QString id = row.value(u"id"_s).toString();
+        if (id.isEmpty()) {
+            continue;
+        }
+        group.writeEntry(id, row.value(u"autoStart"_s).toBool());
+        current.append(id);
+    }
+
+    // Drop flags for streams that no longer exist in the document.
+    for (const QString &key : group.keyList()) {
+        if (!current.contains(key)) {
+            group.deleteEntry(key);
+        }
+    }
+
+    CBridgeSettings::self()->save();
 }
 
 } // namespace CBridge

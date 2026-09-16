@@ -15,6 +15,7 @@
 #include <QString>
 #include <QStringList>
 #include <QUrl>
+#include <QVariant>
 
 namespace CBridge {
 
@@ -60,8 +61,9 @@ public:
     QString ndiStatus() const;
     QStringList sinkKindNames() const;
 
-    /// Applies the startup config selection: an explicit path wins, otherwise the
-    /// last used one when auto-load is enabled.
+    /// Applies the startup config selection: an explicit path wins, then the configured
+    /// startup document, then the last used one when auto-load is enabled. Streams flagged
+    /// to start on load are started once a configuration has been loaded.
     void loadStartupConfig(const QString &explicitPath);
 
     Q_INVOKABLE void newConfig();
@@ -91,6 +93,14 @@ public:
 
     Q_INVOKABLE QStringList validationProblems() const;
 
+    /// The per-stream "start on configuration load" flags of the current document as
+    /// {id, name, autoStart} rows, for the preferences dialog.
+    Q_INVOKABLE QVariantList streamAutoStarts() const;
+
+    /// Persists the startup preferences and the per-stream auto-start flags in one save.
+    Q_INVOKABLE void saveStartupSettings(const QString &configPath, bool autoLoadLastConfig,
+                                         bool startOnLoad, const QVariantList &streamRows);
+
 Q_SIGNALS:
     void configChanged();
     void dirtyChanged();
@@ -104,6 +114,10 @@ private:
     void setDirty(bool dirty);
     void refreshModel();
     void recomputeDraftProblems();
+
+    /// Starts the enabled streams flagged to run on load (global switch or per stream).
+    void startStreamsOnLoad();
+    bool streamAutoStart(const QString &streamId) const;
 
     BridgeConfig m_config;
     QString m_configPath;

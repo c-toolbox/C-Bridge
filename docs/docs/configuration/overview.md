@@ -10,11 +10,12 @@ C-Bridge keeps two kinds of settings apart.
 | | Stored in | Contains |
 | --- | --- | --- |
 | **Configuration documents** | JSON files you choose | Streams and their sinks |
-| **Application preferences** | `QSettings` (per user) | Last config, auto-load, theme |
+| **Application preferences** | KConfig (`C-Bridge/cbridge.conf`, per user) | Startup document, auto-load, start-on-load flags |
 
 Configuration documents are meant to be shared, committed to version control and
 copied between machines. Credentials are therefore **not** written into them — see
-[Streams](/configuration/streams).
+[Streams](/configuration/streams). Preferences live in the KDE KConfig store and are
+edited through the **Settings** dialog on the streams page.
 
 ## Document format
 
@@ -33,9 +34,20 @@ rather than silently misread; older documents are migrated forward.
 
 The configuration loaded at startup is resolved in this order:
 
-1. `--config <path>` on the command line
-2. the last successfully opened document, if auto-load is enabled
-3. nothing — C-Bridge opens with an empty configuration
+1. `--stream-config <path>` on the command line
+2. the startup document chosen in **Settings**, if it exists
+3. the last successfully opened document, if auto-load is enabled
+4. nothing — C-Bridge opens with an empty configuration
+
+## Starting streams at startup
+
+After a configuration has loaded at startup, C-Bridge can start streams automatically:
+
+- **Start all enabled streams after the configuration has loaded** starts every enabled stream.
+- Each stream in the document also has its own *start on load* flag in **Settings**; flagged
+  streams start even when the global switch is off. Disabled streams never start automatically.
+
+The `--autostart` command-line option still forces a full start regardless of these settings.
 
 ## Validation
 

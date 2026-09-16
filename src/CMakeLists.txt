@@ -48,6 +48,10 @@ qt_add_executable(${TARGET_NAME}
   config/bridgeconfig.cpp
   config/bridgeconfig.h
 
+  # KConfig preferences definition; compiled into CBridgeSettings by kconfig_add_kcfg_files.
+  settings/cbridgesettings.kcfg
+  settings/cbridgesettings.kcfgc
+
   webrtc/linkheaderparser.cpp
   webrtc/linkheaderparser.h
   webrtc/opusaudiodepacketizer.cpp
@@ -77,6 +81,7 @@ qt_add_qml_module(${TARGET_NAME}
   VERSION 1.0
   QML_FILES
     Main.qml
+    SettingsDialog.qml
     StreamEditorPage.qml
     SinkCard.qml
     TsSinkForm.qml
@@ -92,6 +97,10 @@ if(_qt_core_target_type STREQUAL "STATIC_LIBRARY")
 else()
     set_target_properties(${TARGET_NAME} PROPERTIES QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
 endif()
+
+# KConfig preferences (same pattern as C-Slice): generates cbridgesettings.h/.cpp into the
+# build dir, which is already on the include path below.
+kconfig_add_kcfg_files(${TARGET_NAME} GENERATE_MOC settings/cbridgesettings.kcfgc)
 
 target_include_directories(${TARGET_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"

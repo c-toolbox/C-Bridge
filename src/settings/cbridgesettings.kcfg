@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ SPDX-FileCopyrightText: 2026 Erik Sundén
+ SPDX-License-Identifier: GPL-3.0-or-later
+ -->
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+                          http://www.kde.org/standards/kcfg/1.0/kcfg.xsd" >
+  <kcfgfile name="C-Bridge/cbridge.conf"/>
+  <group name="StartupSettings">
+    <entry name="ConfigPath" type="String">
+      <label>Configuration document to load at startup.</label>
+      <default></default>
+    </entry>
+    <entry name="AutoLoadLastConfig" type="Bool">
+      <label>Reload the last opened configuration at startup when no startup document is set or it cannot be found.</label>
+      <default>true</default>
+    </entry>
+    <entry name="StartOnLoad" type="Bool">
+      <label>Start every enabled stream after the configuration has loaded at startup.</label>
+      <default>false</default>
+    </entry>
+  </group>
+  <group name="SessionSettings">
+    <entry name="LastConfigPath" type="String">
+      <label>Last opened or saved configuration document. Maintained automatically by C-Bridge.</label>
+      <default></default>
+    </entry>
+  </group>
+</kcfg>
