@@ -377,7 +377,7 @@ void BridgeController::setStreamEnabled(const QString &streamId, bool enabled)
     setDirty(true);
 }
 
-QString BridgeController::mpvCommandFor(const QString &streamId) const
+QString BridgeController::tsAddressFor(const QString &streamId) const
 {
     const int index = m_config.indexOfStream(streamId);
     if (index < 0) {
@@ -388,10 +388,7 @@ QString BridgeController::mpvCommandFor(const QString &streamId) const
         if (sink.kind != SinkKind::TsMulticast || !sink.enabled) {
             continue;
         }
-        // Without these, mpv buffers heavily and hides the low-latency benefit.
-        return u"mpv udp://%1:%2 --profile=low-latency --cache=no --demuxer-lavf-o=fflags=+nobuffer"_s
-            .arg(sink.ts.groupAddress)
-            .arg(sink.ts.port);
+        return u"udp://%1:%2"_s.arg(sink.ts.groupAddress).arg(sink.ts.port);
     }
     return {};
 }

@@ -52,6 +52,12 @@ public:
     void setVideoCallback(MediaFrameCallback callback);
     void setAudioCallback(MediaFrameCallback callback);
 
+    /// Diagnostic hook (used by the smoke test): receives each raw audio RTP datagram, header
+    /// included, before depacketization and padding stripping, so wire-level behaviour such as
+    /// RFC 3550 padding can be verified. Not called when unset.
+    using RawAudioPacketCallback = std::function<void(const std::uint8_t *data, std::size_t size)>;
+    void setRawAudioPacketCallback(RawAudioPacketCallback callback);
+
     void start();
     void stop();
 
@@ -84,6 +90,7 @@ private:
 
     MediaFrameCallback m_onVideo;
     MediaFrameCallback m_onAudio;
+    RawAudioPacketCallback m_onRawAudioPacket;
 
     std::atomic<StreamState> m_state { StreamState::Idle };
     std::atomic<VideoCodec> m_videoCodec { VideoCodec::Unknown };

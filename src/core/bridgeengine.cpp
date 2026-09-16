@@ -80,10 +80,18 @@ void BridgeEngine::stopStream(const QString &streamId)
         return;
     }
 
+    // Drop the counters before stop() so the Idle emission re-reads a clean state
+    // instead of the last sampled one, which still says Running.
+    m_stats.remove(streamId);
+    m_lastBytesIn.remove(streamId);
+    m_sinkStats.remove(streamId);
+
     pipeline->stop();
     pipeline->deleteLater();
 
-    m_sinkStats.remove(streamId);
+    // stop() may return early without emitting (e.g. a stream that never got running),
+    // so the model is told explicitly to pick up the idle state.
+    Q_EMIT streamStateChanged(streamId, StreamState::Idle);
 
     if (m_pipelines.isEmpty()) {
         m_statsTimer->stop();

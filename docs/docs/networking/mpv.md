@@ -14,8 +14,8 @@ Opus audio, with no transcoding.
 mpv udp://239.1.1.1:5000 --profile=low-latency --cache=no --demuxer-lavf-o=fflags=+nobuffer
 ```
 
-The **Copy** button next to each stream in the UI produces exactly this line with
-the right group and port filled in.
+The **Copy** button next to each stream in the UI fills the clipboard with the plain
+`udp://group:port` address, ready to paste into this command.
 
 :::danger Tuning the receiver is not optional
 By default mpv buffers enough to erase the benefit of the passthrough path. An

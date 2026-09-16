@@ -206,9 +206,9 @@ Kirigami.ApplicationWindow {
 
                     Controls.Button {
                         icon.name: "edit-copy"
-                        Controls.ToolTip.text: qsTr("Copy an mpv command for this stream")
+                        Controls.ToolTip.text: qsTr("Copy the multicast address for this stream")
                         Controls.ToolTip.visible: hovered
-                        onClicked: app.copyToClipboard(controller.mpvCommandFor(model.streamId))
+                        onClicked: app.copyToClipboard(controller.tsAddressFor(model.streamId))
                     }
 
                     Controls.Button {

@@ -50,6 +50,8 @@ qt_add_executable(${TARGET_NAME}
 
   webrtc/linkheaderparser.cpp
   webrtc/linkheaderparser.h
+  webrtc/opusaudiodepacketizer.cpp
+  webrtc/opusaudiodepacketizer.h
   webrtc/whepclient.cpp
   webrtc/whepclient.h
   webrtc/webrtcsource.cpp
@@ -173,6 +175,99 @@ if(WIN32 AND FFMPEG_RUNTIME_DIR)
     add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CBRIDGE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:${TARGET_NAME}>"
+      COMMAND_EXPAND_LISTS
+      VERBATIM
+    )
+  endif()
+endif()
+
+# --- Audio smoke test ---------------------------------------------------------
+# Standalone round-trip check for the Opus path used by both sinks: encode a known tone,
+# decode it with the production AudioDecoder and verify the waveform, then mux the same
+# packets into an MPEG-TS file exactly like TsMulticastSink does and decode that back.
+add_executable(audio-smoke-test tests/audio_smoke_test.cpp media/audiodecoder.cpp)
+target_include_directories(audio-smoke-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(audio-smoke-test PRIVATE
+  Qt6::Core
+  FFmpeg::AVCODEC
+  FFmpeg::AVFORMAT
+  FFmpeg::AVUTIL
+  FFmpeg::SWRESAMPLE
+)
+
+if(MSVC)
+  target_compile_options(audio-smoke-test PRIVATE
+    /permissive-
+    /Zc:__cplusplus
+    /wd4244
+    /wd4267
+  )
+  target_compile_definitions(audio-smoke-test PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS
+  )
+endif()
+
+if(WIN32 AND FFMPEG_RUNTIME_DIR)
+  file(GLOB CBRIDGE_SMOKE_FFMPEG_DLLS "${FFMPEG_RUNTIME_DIR}/*.dll")
+  if(CBRIDGE_SMOKE_FFMPEG_DLLS)
+    add_custom_command(TARGET audio-smoke-test POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CBRIDGE_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:audio-smoke-test>"
+      COMMAND_EXPAND_LISTS
+      VERBATIM
+    )
+  endif()
+endif()
+
+# --- Live WebRTC audio smoke test ----------------------------------------------
+# Connects to a running WHEP endpoint with the production WebRtcSource, captures raw Opus
+# packets and decodes them with the production AudioDecoder; dumps WAV + MPEG-TS files for
+# manual listening. qt_add_executable because webrtcsource.h/whepclient.h carry Q_OBJECT.
+qt_add_executable(webrtc-audio-smoke-test
+  tests/webrtc_audio_smoke_test.cpp
+  core/bridgetypes.cpp
+  core/bridgetypes.h
+  media/audiodecoder.cpp
+  webrtc/linkheaderparser.cpp
+  webrtc/opusaudiodepacketizer.cpp
+  webrtc/whepclient.cpp
+  webrtc/webrtcsource.cpp
+)
+target_include_directories(webrtc-audio-smoke-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# Same as the main target: keep Craft's FFmpeg headers from shadowing the pinned tree.
+target_include_directories(webrtc-audio-smoke-test BEFORE PRIVATE "${FFMPEG_INCLUDE_DIRS}")
+target_link_libraries(webrtc-audio-smoke-test PRIVATE
+  Qt6::Core
+  Qt6::Network
+  FFmpeg::AVCODEC
+  FFmpeg::AVFORMAT
+  FFmpeg::AVUTIL
+  FFmpeg::SWRESAMPLE
+  LibDataChannel::LibDataChannel
+)
+
+if(MSVC)
+  target_compile_options(webrtc-audio-smoke-test PRIVATE
+    /permissive-
+    /Zc:__cplusplus
+    /wd4244
+    /wd4267
+  )
+  target_compile_definitions(webrtc-audio-smoke-test PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS
+  )
+endif()
+
+if(WIN32 AND FFMPEG_RUNTIME_DIR)
+  file(GLOB CBRIDGE_WRTC_SMOKE_FFMPEG_DLLS "${FFMPEG_RUNTIME_DIR}/*.dll")
+  if(CBRIDGE_WRTC_SMOKE_FFMPEG_DLLS)
+    add_custom_command(TARGET webrtc-audio-smoke-test POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CBRIDGE_WRTC_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:webrtc-audio-smoke-test>"
       COMMAND_EXPAND_LISTS
       VERBATIM
     )

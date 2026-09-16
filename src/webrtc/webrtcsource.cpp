@@ -7,12 +7,15 @@
 
 #include "webrtc/webrtcsource.h"
 
+#include "webrtc/opusaudiodepacketizer.h"
 #include "webrtc/whepclient.h"
 
 #include <QRegularExpression>
 #include <QStringList>
 
 #include <rtc/rtc.hpp>
+
+#include <cstdio>
 
 using namespace Qt::Literals::StringLiterals;
 
@@ -76,6 +79,11 @@ void WebRtcSource::setVideoCallback(MediaFrameCallback callback)
 void WebRtcSource::setAudioCallback(MediaFrameCallback callback)
 {
     m_onAudio = std::move(callback);
+}
+
+void WebRtcSource::setRawAudioPacketCallback(RawAudioPacketCallback callback)
+{
+    m_onRawAudioPacket = std::move(callback);
 }
 
 StreamState WebRtcSource::state() const
@@ -216,6 +224,9 @@ void WebRtcSource::onLocalDescriptionReady()
 
 void WebRtcSource::onAnswer(const QString &sdpAnswer)
 {
+    // TEMPORARY diagnostic for live audio debugging - remove before committing.
+    std::printf("[sdp-answer]\n%s\n", sdpAnswer.toUtf8().constData());
+
     if (!m_peer) {
         return;
     }
@@ -254,9 +265,12 @@ void WebRtcSource::onAnswer(const QString &sdpAnswer)
     }
 
     if (m_audioTrack) {
-        // libdatachannel has no Opus-specific depacketizer; the generic one strips
-        // the RTP header and yields the raw Opus payload, which is what we forward.
-        m_audioTrack->setMediaHandler(std::make_shared<rtc::RtpDepacketizer>());
+        // libdatachannel's generic RtpDepacketizer does not strip RFC 3550 padding (its H264/H265
+        // siblings do), so a padded sender would leak the pad bytes into the Opus payload and make
+        // two-CBR-frame packets structurally invalid. Use a subclass that removes them first.
+        auto opusDepacketizer = std::make_shared<OpusAudioDepacketizer>();
+        opusDepacketizer->setRawPacketCallback(m_onRawAudioPacket);
+        m_audioTrack->setMediaHandler(opusDepacketizer);
         m_audioTrack->chainMediaHandler(std::make_shared<rtc::RtcpReceivingSession>());
 
         m_audioTrack->onFrame([this](rtc::binary data, rtc::FrameInfo info) {

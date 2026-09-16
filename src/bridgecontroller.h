@@ -85,8 +85,9 @@ public:
     /// Fills a sink row with a multicast endpoint not already claimed in this config.
     Q_INVOKABLE void suggestMulticastFor(int sinkRow);
 
-    /// A ready-to-paste low-latency mpv command for a stream's multicast sink.
-    Q_INVOKABLE QString mpvCommandFor(const QString &streamId) const;
+    /// The plain udp:// address of a stream's first enabled multicast sink, for pasting
+    /// into a player such as mpv.
+    Q_INVOKABLE QString tsAddressFor(const QString &streamId) const;
 
     Q_INVOKABLE QStringList validationProblems() const;
 
