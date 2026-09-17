@@ -42,6 +42,10 @@ qt_add_executable(${TARGET_NAME}
   sinks/streamsink.h
   sinks/tsmulticastsink.cpp
   sinks/tsmulticastsink.h
+  sinks/rtpmulticastsink.cpp
+  sinks/rtpmulticastsink.h
+  sinks/rtspsink.cpp
+  sinks/rtspsink.h
   sinks/ndisink.cpp
   sinks/ndisink.h
 
@@ -85,6 +89,8 @@ qt_add_qml_module(${TARGET_NAME}
     StreamEditorPage.qml
     SinkCard.qml
     TsSinkForm.qml
+    RtpSinkForm.qml
+    RtspSinkForm.qml
     NdiSinkForm.qml
 )
 
@@ -279,6 +285,100 @@ if(WIN32 AND FFMPEG_RUNTIME_DIR)
         ${CBRIDGE_WRTC_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:webrtc-audio-smoke-test>"
       COMMAND_EXPAND_LISTS
       VERBATIM
+    )
+  endif()
+endif()
+
+# --- RTSP smoke test -----------------------------------------------------------
+# Exercises the RTSP unicast sink end to end without a live source: walks one client through
+# OPTIONS/DESCRIBE/SETUP/PLAY, feeds fake video units and confirms RTP datagrams arrive on
+# the UDP port the client offered in SETUP.
+qt_add_executable(rtsp-smoke-test
+  tests/rtsp_smoke_test.cpp
+  sinks/rtspsink.cpp
+)
+target_include_directories(rtsp-smoke-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# qt_add_executable defaults to the Windows GUI subsystem; this test prints to a console.
+set_target_properties(rtsp-smoke-test PROPERTIES WIN32_EXECUTABLE OFF)
+# Same as the main target: keep Craft's FFmpeg headers from shadowing the pinned tree.
+target_include_directories(rtsp-smoke-test BEFORE PRIVATE "${FFMPEG_INCLUDE_DIRS}")
+target_link_libraries(rtsp-smoke-test PRIVATE
+  Qt6::Core
+  Qt6::Network
+  FFmpeg::AVCODEC
+  FFmpeg::AVFORMAT
+  FFmpeg::AVUTIL
+)
+
+if(MSVC)
+  target_compile_options(rtsp-smoke-test PRIVATE
+    /permissive-
+    /Zc:__cplusplus
+    /wd4244
+    /wd4267
+  )
+  target_compile_definitions(rtsp-smoke-test PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS
+  )
+endif()
+
+if(WIN32 AND FFMPEG_RUNTIME_DIR)
+  file(GLOB CBRIDGE_RTSP_SMOKE_FFMPEG_DLLS "${FFMPEG_RUNTIME_DIR}/*.dll")
+  if(CBRIDGE_RTSP_SMOKE_FFMPEG_DLLS)
+    add_custom_command(TARGET rtsp-smoke-test POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CBRIDGE_RTSP_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:rtsp-smoke-test>"
+        COMMAND_EXPAND_LISTS
+        VERBATIM
+    )
+  endif()
+endif()
+
+# --- RTP multicast smoke test ---------------------------------------------------
+# Exercises the raw RTP sink end to end without a live source or a multicast group:
+# opens the sink against loopback unicast destinations, feeds fake H.264 keyframes and
+# Opus packets and confirms valid RTP datagrams arrive on both the video and audio ports.
+qt_add_executable(rtp-smoke-test
+  tests/rtp_smoke_test.cpp
+  sinks/rtpmulticastsink.cpp
+)
+target_include_directories(rtp-smoke-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# qt_add_executable defaults to the Windows GUI subsystem; this test prints to a console.
+set_target_properties(rtp-smoke-test PROPERTIES WIN32_EXECUTABLE OFF)
+# Same as the main target: keep Craft's FFmpeg headers from shadowing the pinned tree.
+target_include_directories(rtp-smoke-test BEFORE PRIVATE "${FFMPEG_INCLUDE_DIRS}")
+target_link_libraries(rtp-smoke-test PRIVATE
+  Qt6::Core
+  Qt6::Network
+  FFmpeg::AVCODEC
+  FFmpeg::AVFORMAT
+  FFmpeg::AVUTIL
+)
+
+if(MSVC)
+  target_compile_options(rtp-smoke-test PRIVATE
+    /permissive-
+    /Zc:__cplusplus
+    /wd4244
+    /wd4267
+  )
+  target_compile_definitions(rtp-smoke-test PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS
+  )
+endif()
+
+if(WIN32 AND FFMPEG_RUNTIME_DIR)
+  file(GLOB CBRIDGE_RTP_SMOKE_FFMPEG_DLLS "${FFMPEG_RUNTIME_DIR}/*.dll")
+  if(CBRIDGE_RTP_SMOKE_FFMPEG_DLLS)
+    add_custom_command(TARGET rtp-smoke-test POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CBRIDGE_RTP_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:rtp-smoke-test>"
+        COMMAND_EXPAND_LISTS
+        VERBATIM
     )
   endif()
 endif()

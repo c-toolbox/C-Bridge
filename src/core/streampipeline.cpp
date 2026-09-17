@@ -8,6 +8,8 @@
 #include "core/streampipeline.h"
 
 #include "sinks/streamsink.h"
+#include "sinks/rtpmulticastsink.h"
+#include "sinks/rtspsink.h"
 #include "sinks/tsmulticastsink.h"
 #include "webrtc/webrtcsource.h"
 
@@ -105,6 +107,12 @@ void StreamPipeline::start()
         switch (sinkConfig.kind) {
         case SinkKind::TsMulticast:
             m_sinks.push_back(std::make_unique<TsMulticastSink>(sinkConfig.ts));
+            break;
+        case SinkKind::RtpMulticast:
+            m_sinks.push_back(std::make_unique<RtpMulticastSink>(sinkConfig.rtp));
+            break;
+        case SinkKind::RtspUnicast:
+            m_sinks.push_back(std::make_unique<RtspSink>(sinkConfig.rtsp, m_config.name));
             break;
         case SinkKind::Ndi:
 #ifdef CBRIDGE_NDI_SUPPORT

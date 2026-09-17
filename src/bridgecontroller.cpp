@@ -113,7 +113,10 @@ QString BridgeController::ndiStatus() const
 
 QStringList BridgeController::sinkKindNames() const
 {
-    return { CBridge::toString(SinkKind::TsMulticast), CBridge::toString(SinkKind::Ndi) };
+    return { CBridge::toString(SinkKind::TsMulticast),
+             CBridge::toString(SinkKind::RtpMulticast),
+             CBridge::toString(SinkKind::RtspUnicast),
+             CBridge::toString(SinkKind::Ndi) };
 }
 
 void BridgeController::setStatusMessage(const QString &message)
@@ -371,10 +374,18 @@ void BridgeController::suggestMulticastFor(int sinkRow)
     }
     scratch.streams.append(m_draft->toConfig());
 
-    const TsMulticastSinkConfig suggestion = scratch.suggestMulticastEndpoint();
     const QModelIndex row = sinks->index(sinkRow);
-    sinks->setData(row, suggestion.groupAddress, SinkListModel::GroupAddressRole);
-    sinks->setData(row, int(suggestion.port), SinkListModel::PortRole);
+    const bool rtpSink = sinks->data(row, SinkListModel::KindRole).toString() == CBridge::toString(SinkKind::RtpMulticast);
+
+    // An RTP sink also needs the next port kept free for its audio stream.
+    const TsMulticastSinkConfig suggestion = scratch.suggestMulticastEndpoint(rtpSink);
+    if (rtpSink) {
+        sinks->setData(row, suggestion.groupAddress, SinkListModel::RtpGroupAddressRole);
+        sinks->setData(row, int(suggestion.port), SinkListModel::RtpPortRole);
+    } else {
+        sinks->setData(row, suggestion.groupAddress, SinkListModel::GroupAddressRole);
+        sinks->setData(row, int(suggestion.port), SinkListModel::PortRole);
+    }
 }
 
 void BridgeController::recomputeDraftProblems()

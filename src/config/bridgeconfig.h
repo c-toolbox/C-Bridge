@@ -41,6 +41,50 @@ struct TsMulticastSinkConfig {
     QString url() const;
 };
 
+/// Raw RTP over UDP multicast: the H.264/H.265 video and the Opus audio are sent as
+/// separate RTP streams, one FFmpeg rtp muxer context per stream. Like the TS path
+/// this is a pure passthrough - no decode or encode happens on it. Video goes to
+/// `port` and audio to `port + 1`; RTCP sender reports ride on the same sockets.
+struct RtpMulticastSinkConfig {
+    QString groupAddress = QStringLiteral("239.1.1.1");
+    quint16 port = 5004; // video RTP port; audio uses port + 1
+    int ttl = 8;
+
+    /// Local interface address to transmit from. Empty lets the OS pick, which on a
+    /// multi-NIC host frequently selects the wrong one.
+    QString localAddress;
+
+    int packetSize = 1316; // keeps each RTP datagram inside a standard MTU
+
+    QJsonObject toJson() const;
+    static RtpMulticastSinkConfig fromJson(const QJsonObject &json);
+
+    /// The udp:// destination of the video stream, for pasting into a player.
+    QString videoUrl() const;
+    /// The udp:// destination of the audio stream (video port + 1).
+    QString audioUrl() const;
+};
+
+/// RTSP over RTP/UDP unicast. C-Bridge runs a small RTSP server and serves the
+/// source bitstream as MPEG-TS over RTP to each connected player, so like the
+/// multicast path no decode or encode happens on this one.
+struct RtspSinkConfig {
+    int port = 8554; // TCP control port for RTSP signaling
+
+    /// Path players connect with: rtsp://<host>:<port>/<path>.
+    QString path = QStringLiteral("stream");
+
+    /// Local interface address to bind and transmit from. Empty lets the OS pick,
+    /// which on a multi-NIC host frequently selects the wrong one.
+    QString localAddress;
+
+    QJsonObject toJson() const;
+    static RtspSinkConfig fromJson(const QJsonObject &json);
+
+    /// The address players connect with, e.g. rtsp://10.0.0.5:8554/stream.
+    QString url() const;
+};
+
 struct NdiSinkConfig {
     QString senderName;
     QString groups;
@@ -60,6 +104,8 @@ struct SinkConfig {
     SinkKind kind = SinkKind::TsMulticast;
     bool enabled = true;
     TsMulticastSinkConfig ts;
+    RtpMulticastSinkConfig rtp;
+    RtspSinkConfig rtsp;
     NdiSinkConfig ndi;
 
     QJsonObject toJson() const;
@@ -117,8 +163,9 @@ public:
 
     int indexOfStream(const QString &id) const;
 
-    /// Picks a multicast endpoint not already used by this config.
-    TsMulticastSinkConfig suggestMulticastEndpoint() const;
+    /// Picks a multicast endpoint not already used by this config. With audioPort set,
+    /// both the port and the one after it must be free (RTP sinks use two ports).
+    TsMulticastSinkConfig suggestMulticastEndpoint(bool audioPort = false) const;
 };
 
 } // namespace CBridge

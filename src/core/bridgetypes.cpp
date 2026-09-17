@@ -37,6 +37,8 @@ QString toString(SinkKind kind)
 {
     switch (kind) {
     case SinkKind::TsMulticast: return u"ts-multicast"_s;
+    case SinkKind::RtpMulticast: return u"rtp-multicast"_s;
+    case SinkKind::RtspUnicast: return u"rtsp-unicast"_s;
     case SinkKind::Ndi: return u"ndi"_s;
     }
     return u"unknown"_s;
@@ -50,6 +52,12 @@ SinkKind sinkKindFromString(const QString &text, bool *ok)
     }
     if (normalized == u"ts-multicast"_s || normalized == u"ts"_s) {
         return SinkKind::TsMulticast;
+    }
+    if (normalized == u"rtp-multicast"_s || normalized == u"rtp"_s) {
+        return SinkKind::RtpMulticast;
+    }
+    if (normalized == u"rtsp-unicast"_s || normalized == u"rtsp"_s) {
+        return SinkKind::RtspUnicast;
     }
     if (normalized == u"ndi"_s) {
         return SinkKind::Ndi;

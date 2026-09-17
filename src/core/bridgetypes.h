@@ -28,8 +28,10 @@ enum class AudioCodec {
 Q_ENUM_NS(AudioCodec)
 
 enum class SinkKind {
-    TsMulticast,
-    Ndi,
+    TsMulticast, // MPEG-TS over UDP multicast (passthrough)
+    RtpMulticast, // raw H.264/HEVC + Opus RTP over UDP multicast (passthrough)
+    RtspUnicast, // RTSP server serving MPEG-TS over RTP/UDP unicast (passthrough)
+    Ndi,         // NDI source (decode + re-encode)
 };
 Q_ENUM_NS(SinkKind)
 

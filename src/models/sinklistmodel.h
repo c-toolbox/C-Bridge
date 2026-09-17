@@ -35,6 +35,19 @@ public:
         PcrPeriodMsRole,
         TsUrlRole,
 
+        RtpGroupAddressRole,
+        RtpPortRole,
+        RtpTtlRole,
+        RtpLocalAddressRole,
+        RtpPacketSizeRole,
+        RtpVideoUrlRole,
+        RtpAudioUrlRole,
+
+        RtspPortRole,
+        RtspPathRole,
+        RtspLocalAddressRole,
+        RtspUrlRole,
+
         SenderNameRole,
         TargetWidthRole,
         TargetHeightRole,

@@ -30,6 +30,19 @@ Kirigami.AbstractCard {
     required property int pcrPeriodMs
     required property string tsUrl
 
+    required property string rtpGroupAddress
+    required property int rtpPort
+    required property int rtpTtl
+    required property string rtpLocalAddress
+    required property int rtpPacketSize
+    required property string rtpVideoUrl
+    required property string rtpAudioUrl
+
+    required property int rtspPort
+    required property string rtspPath
+    required property string rtspLocalAddress
+    required property string rtspUrl
+
     required property string senderName
     required property int targetWidth
     required property int targetHeight
@@ -73,7 +86,34 @@ Kirigami.AbstractCard {
 
         Loader {
             Layout.fillWidth: true
-            sourceComponent: card.kind === "ndi" ? ndiForm : tsForm
+            sourceComponent: card.kind === "rtsp-unicast" ? rtspForm : (card.kind === "ndi" ? ndiForm : (card.kind === "rtp-multicast" ? rtpForm : tsForm))
+        }
+
+        Component {
+            id: rtpForm
+
+            RtpSinkForm {
+                sinkRow: card.index
+                rtpGroupAddress: card.rtpGroupAddress
+                rtpPort: card.rtpPort
+                rtpTtl: card.rtpTtl
+                rtpLocalAddress: card.rtpLocalAddress
+                rtpPacketSize: card.rtpPacketSize
+                rtpVideoUrl: card.rtpVideoUrl
+                rtpAudioUrl: card.rtpAudioUrl
+            }
+        }
+
+        Component {
+            id: rtspForm
+
+            RtspSinkForm {
+                sinkRow: card.index
+                rtspPort: card.rtspPort
+                rtspPath: card.rtspPath
+                rtspLocalAddress: card.rtspLocalAddress
+                rtspUrl: card.rtspUrl
+            }
         }
 
         Component {

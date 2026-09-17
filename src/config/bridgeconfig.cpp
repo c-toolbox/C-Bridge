@@ -37,6 +37,16 @@ bool isMulticastV4(const QString &address)
     return (raw >> 28) == 0xE; // 224.0.0.0/4
 }
 
+/// RTSP paths are relative and never carry a leading slash.
+QString sanitizeRtspPath(const QString &raw)
+{
+    QString path = raw.trimmed();
+    while (path.startsWith(u'/')) {
+        path.remove(0, 1);
+    }
+    return path;
+}
+
 } // namespace
 
 QJsonObject TsMulticastSinkConfig::toJson() const
@@ -79,6 +89,65 @@ QString TsMulticastSinkConfig::url() const
     return url;
 }
 
+QJsonObject RtpMulticastSinkConfig::toJson() const
+{
+    return QJsonObject {
+        { u"groupAddress"_s, groupAddress },
+        { u"port"_s, int(port) },
+        { u"ttl"_s, ttl },
+        { u"localAddress"_s, localAddress },
+        { u"packetSize"_s, packetSize },
+    };
+}
+
+RtpMulticastSinkConfig RtpMulticastSinkConfig::fromJson(const QJsonObject &json)
+{
+    RtpMulticastSinkConfig config;
+    config.groupAddress = json.value(u"groupAddress"_s).toString(config.groupAddress);
+    // The audio stream uses port + 1, so the video port may not be the last one.
+    config.port = quint16(clampInt(json.value(u"port"_s).toInt(config.port), 1, 65534));
+    config.ttl = clampInt(json.value(u"ttl"_s).toInt(config.ttl), 1, 255);
+    config.localAddress = json.value(u"localAddress"_s).toString();
+    // The RTP header alone is 12 bytes; below ~60 the payload would be useless.
+    config.packetSize = clampInt(json.value(u"packetSize"_s).toInt(config.packetSize), 64, 65535);
+    return config;
+}
+
+QString RtpMulticastSinkConfig::videoUrl() const
+{
+    return u"udp://%1:%2"_s.arg(groupAddress).arg(port);
+}
+
+QString RtpMulticastSinkConfig::audioUrl() const
+{
+    return u"udp://%1:%2"_s.arg(groupAddress).arg(int(port) + 1);
+}
+
+QJsonObject RtspSinkConfig::toJson() const
+{
+    return QJsonObject {
+        { u"port"_s, port },
+        { u"path"_s, path },
+        { u"localAddress"_s, localAddress },
+    };
+}
+
+RtspSinkConfig RtspSinkConfig::fromJson(const QJsonObject &json)
+{
+    RtspSinkConfig config;
+    config.port = clampInt(json.value(u"port"_s).toInt(config.port), 1, 65535);
+    const QString path = sanitizeRtspPath(json.value(u"path"_s).toString(config.path));
+    config.path = path.isEmpty() ? QStringLiteral("stream") : path;
+    config.localAddress = json.value(u"localAddress"_s).toString();
+    return config;
+}
+
+QString RtspSinkConfig::url() const
+{
+    const QString host = localAddress.isEmpty() ? u"0.0.0.0"_s : localAddress;
+    return u"rtsp://%1:%2/%3"_s.arg(host).arg(port).arg(path);
+}
+
 QJsonObject NdiSinkConfig::toJson() const
 {
     return QJsonObject {
@@ -116,6 +185,12 @@ QJsonObject SinkConfig::toJson() const
     case SinkKind::TsMulticast:
         json.insert(u"tsMulticast"_s, ts.toJson());
         break;
+    case SinkKind::RtpMulticast:
+        json.insert(u"rtpMulticast"_s, rtp.toJson());
+        break;
+    case SinkKind::RtspUnicast:
+        json.insert(u"rtsp"_s, rtsp.toJson());
+        break;
     case SinkKind::Ndi:
         json.insert(u"ndi"_s, ndi.toJson());
         break;
@@ -129,6 +204,8 @@ SinkConfig SinkConfig::fromJson(const QJsonObject &json)
     config.kind = sinkKindFromString(json.value(u"kind"_s).toString());
     config.enabled = json.value(u"enabled"_s).toBool(true);
     config.ts = TsMulticastSinkConfig::fromJson(json.value(u"tsMulticast"_s).toObject());
+    config.rtp = RtpMulticastSinkConfig::fromJson(json.value(u"rtpMulticast"_s).toObject());
+    config.rtsp = RtspSinkConfig::fromJson(json.value(u"rtsp"_s).toObject());
     config.ndi = NdiSinkConfig::fromJson(json.value(u"ndi"_s).toObject());
     return config;
 }
@@ -138,6 +215,13 @@ QString SinkConfig::describe() const
     switch (kind) {
     case SinkKind::TsMulticast:
         return u"TS %1:%2"_s.arg(ts.groupAddress).arg(ts.port);
+    case SinkKind::RtpMulticast:
+        // Video port and the audio port right after it.
+        return u"RTP %1:%2/%3"_s.arg(rtp.groupAddress).arg(int(rtp.port)).arg(int(rtp.port) + 1);
+    case SinkKind::RtspUnicast: {
+        const QString host = rtsp.localAddress.isEmpty() ? u"*"_s : rtsp.localAddress;
+        return u"RTSP %1:%2/%3"_s.arg(host).arg(rtsp.port).arg(rtsp.path);
+    }
     case SinkKind::Ndi:
         return u"NDI %1"_s.arg(ndi.senderName);
     }
@@ -345,6 +429,7 @@ QStringList BridgeConfig::validateStream(const StreamConfig &candidate,
 
     // Everything claimed by the other streams, so the candidate never clashes with itself.
     QSet<QString> endpoints;
+    QSet<QString> rtspEndpoints;
     QSet<QString> ndiNames;
     for (const StreamConfig &other : streams) {
         if (other.id == excludeId) {
@@ -356,6 +441,12 @@ QStringList BridgeConfig::validateStream(const StreamConfig &candidate,
             }
             if (sink.kind == SinkKind::TsMulticast) {
                 endpoints.insert(u"%1:%2"_s.arg(sink.ts.groupAddress).arg(sink.ts.port));
+            } else if (sink.kind == SinkKind::RtpMulticast) {
+                // Video port and the audio port right after it.
+                endpoints.insert(u"%1:%2"_s.arg(sink.rtp.groupAddress).arg(int(sink.rtp.port)));
+                endpoints.insert(u"%1:%2"_s.arg(sink.rtp.groupAddress).arg(int(sink.rtp.port) + 1));
+            } else if (sink.kind == SinkKind::RtspUnicast) {
+                rtspEndpoints.insert(u":%1/%2"_s.arg(sink.rtsp.port).arg(sink.rtsp.path));
             } else if (!sink.ndi.senderName.trimmed().isEmpty()) {
                 ndiNames.insert(sink.ndi.senderName);
             }
@@ -380,6 +471,33 @@ QStringList BridgeConfig::validateStream(const StreamConfig &candidate,
                     u"Multicast endpoint %1 is used by more than one sink."_s.arg(endpoint));
             }
             endpoints.insert(endpoint);
+            break;
+        }
+        case SinkKind::RtpMulticast: {
+            if (!isMulticastV4(sink.rtp.groupAddress)) {
+                problems.append(
+                    u"Stream \"%1\": \"%2\" is not an IPv4 multicast address (224.0.0.0/4)."_s
+                        .arg(label, sink.rtp.groupAddress));
+            }
+            // Both the video port and the audio port after it must be free.
+            const QString videoEndpoint = u"%1:%2"_s.arg(sink.rtp.groupAddress).arg(int(sink.rtp.port));
+            const QString audioEndpoint = u"%1:%2"_s.arg(sink.rtp.groupAddress).arg(int(sink.rtp.port) + 1);
+            if (endpoints.contains(videoEndpoint)) {
+                problems.append(u"Multicast endpoint %1 is used by more than one sink."_s.arg(videoEndpoint));
+            }
+            if (endpoints.contains(audioEndpoint)) {
+                problems.append(u"Multicast endpoint %1 is used by more than one sink."_s.arg(audioEndpoint));
+            }
+            endpoints.insert(videoEndpoint);
+            endpoints.insert(audioEndpoint);
+            break;
+        }
+        case SinkKind::RtspUnicast: {
+            const QString endpoint = u":%1/%2"_s.arg(sink.rtsp.port).arg(sink.rtsp.path);
+            if (rtspEndpoints.contains(endpoint)) {
+                problems.append(u"RTSP endpoint %1 is used by more than one sink."_s.arg(endpoint));
+            }
+            rtspEndpoints.insert(endpoint);
             break;
         }
         case SinkKind::Ndi: {
@@ -429,13 +547,18 @@ int BridgeConfig::indexOfStream(const QString &id) const
     return -1;
 }
 
-TsMulticastSinkConfig BridgeConfig::suggestMulticastEndpoint() const
+TsMulticastSinkConfig BridgeConfig::suggestMulticastEndpoint(bool audioPort) const
 {
+    // Endpoints claimed by every multicast sink, including both ports of an RTP sink.
     QSet<QString> used;
     for (const StreamConfig &stream : streams) {
         for (const SinkConfig &sink : stream.sinks) {
+            if (!sink.enabled) continue;
             if (sink.kind == SinkKind::TsMulticast) {
                 used.insert(u"%1:%2"_s.arg(sink.ts.groupAddress).arg(sink.ts.port));
+            } else if (sink.kind == SinkKind::RtpMulticast) {
+                used.insert(u"%1:%2"_s.arg(sink.rtp.groupAddress).arg(int(sink.rtp.port)));
+                used.insert(u"%1:%2"_s.arg(sink.rtp.groupAddress).arg(int(sink.rtp.port) + 1));
             }
         }
     }
@@ -445,9 +568,14 @@ TsMulticastSinkConfig BridgeConfig::suggestMulticastEndpoint() const
         candidate.groupAddress = u"239.1.%1.%2"_s.arg(index / 254).arg((index % 254) + 1);
         candidate.port = quint16(5000 + (index * 2));
         const QString endpoint = u"%1:%2"_s.arg(candidate.groupAddress).arg(candidate.port);
-        if (!used.contains(endpoint)) {
-            return candidate;
+        if (used.contains(endpoint)) {
+            continue;
         }
+        // An RTP sink also needs the next port for its audio stream.
+        if (audioPort && used.contains(u"%1:%2"_s.arg(candidate.groupAddress, int(candidate.port) + 1))) {
+            continue;
+        }
+        return candidate;
     }
     return candidate;
 }
