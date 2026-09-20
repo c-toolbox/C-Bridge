@@ -7,6 +7,7 @@
 
 #include "core/streampipeline.h"
 
+#include "media/opuspayloadsanitizer.h"
 #include "sinks/streamsink.h"
 #include "sinks/rtpmulticastsink.h"
 #include "sinks/rtspsink.h"
@@ -351,9 +352,20 @@ void StreamPipeline::handleAudioUnit(const MediaUnit &unit)
         return;
     }
 
+    // Some upstream encoders append undeclared trailing bytes to their Opus payloads, which makes
+    // CBR packets structurally invalid for every conforming decoder (the NDI path hides this in
+    // AudioDecoder's size-1 retry). Recover the largest valid prefix once here so the passthrough
+    // sinks (TS multicast, RTP multicast, RTSP) deliver playable audio.
+    const std::size_t payloadSize = OpusPayloadSanitizer::validPrefixLength(unit.payload.data(), unit.payload.size());
+    if (payloadSize != unit.payload.size() && !m_warnedOpusTrailingBytes.exchange(true)) {
+        qWarning("stream %s: upstream Opus payloads carry undeclared trailing bytes "
+                 "(first packet %zu -> %zu); stripping them before muxing",
+                 qUtf8Printable(m_config.id), unit.payload.size(), payloadSize);
+    }
+
     for (auto &sink : m_sinks) {
         if (sink->isOpen()) {
-            sink->writeAudio(unit.payload.data(), unit.payload.size(), unit.rtpTimestamp);
+            sink->writeAudio(unit.payload.data(), payloadSize, unit.rtpTimestamp);
         }
     }
 

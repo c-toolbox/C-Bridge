@@ -78,6 +78,10 @@ private:
     bool m_sinksOpen = false;
     bool m_sawKeyframe = false;
 
+    /// Set once when upstream Opus payloads are found to carry undeclared trailing bytes, so the
+    /// diagnostic warning fires a single time per stream instead of on every packet.
+    std::atomic_bool m_warnedOpusTrailingBytes { false };
+
     /// SPS/PPS arrive as their own access units, which are dropped before the first
     /// keyframe, so they are cached and prepended to every keyframe that lacks them.
     std::vector<std::uint8_t> m_parameterSets;

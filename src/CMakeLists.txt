@@ -35,6 +35,8 @@ qt_add_executable(${TARGET_NAME}
   media/videofilter.h
   media/audiodecoder.cpp
   media/audiodecoder.h
+  media/opuspayloadsanitizer.cpp
+  media/opuspayloadsanitizer.h
 
   ndi/ndiruntime.cpp
   ndi/ndiruntime.h
@@ -200,7 +202,7 @@ endif()
 # Standalone round-trip check for the Opus path used by both sinks: encode a known tone,
 # decode it with the production AudioDecoder and verify the waveform, then mux the same
 # packets into an MPEG-TS file exactly like TsMulticastSink does and decode that back.
-add_executable(audio-smoke-test tests/audio_smoke_test.cpp media/audiodecoder.cpp)
+add_executable(audio-smoke-test tests/audio_smoke_test.cpp media/audiodecoder.cpp media/opuspayloadsanitizer.cpp)
 target_include_directories(audio-smoke-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(audio-smoke-test PRIVATE
   Qt6::Core
@@ -245,6 +247,7 @@ qt_add_executable(webrtc-audio-smoke-test
   core/bridgetypes.cpp
   core/bridgetypes.h
   media/audiodecoder.cpp
+  media/opuspayloadsanitizer.cpp
   webrtc/linkheaderparser.cpp
   webrtc/opusaudiodepacketizer.cpp
   webrtc/whepclient.cpp

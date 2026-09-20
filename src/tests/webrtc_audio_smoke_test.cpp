@@ -14,7 +14,9 @@
 //   1. decodes them with the production AudioDecoder and verifies format/level;
 //   2. dumps the decoded PCM to a WAV file so you can listen to it yourself;
 //   3. muxes the captured packets into an MPEG-TS file with exactly the parameters
-//      TsMulticastSink uses, so you can check in VLC what multicast delivers.
+//      TsMulticastSink uses, so you can check in VLC what multicast delivers. The TS mux applies
+//      OpusPayloadSanitizer first, mirroring StreamPipeline::handleAudioUnit, which strips the
+//      undeclared trailing bytes some upstream encoders append to their CBR Opus payloads.
 //
 // Build and run:
 //   cmake --build build --target webrtc-audio-smoke-test --config Release
@@ -22,6 +24,7 @@
 
 #include "media/audiodecoder.h"
 #include "media/avwrappers.h"
+#include "media/opuspayloadsanitizer.h"
 #include "webrtc/webrtcsource.h"
 
 extern "C" {
@@ -200,10 +203,21 @@ bool writePcm16Wav(const QString &path, const std::vector<std::vector<float>> &c
 }
 
 // Muxes the captured packets into an MPEG-TS file with exactly the parameters
-// TsMulticastSink uses (Opus stream, 48 kHz time base, RTP timestamps as PTS/DTS).
+// TsMulticastSink uses (Opus stream, 48 kHz time base, RTP timestamps as PTS/DTS). Like
+// StreamPipeline::handleAudioUnit, each payload is first run through OpusPayloadSanitizer so the
+// artifact matches what multicast actually delivers; trim statistics come back in *trimmedPackets
+// and *trimmedBytes when non-null.
 bool writeTsFile(const QString &path, const std::vector<CapturedPacket> &packets, int sampleRate,
-                 int channelCount)
+                 int channelCount, std::uint64_t *trimmedPackets = nullptr,
+                 std::uint64_t *trimmedBytes = nullptr)
 {
+    if (trimmedPackets) {
+        *trimmedPackets = 0;
+    }
+    if (trimmedBytes) {
+        *trimmedBytes = 0;
+    }
+
     AVFormatContext *muxer = nullptr;
     if (avformat_alloc_output_context2(&muxer, nullptr, "mpegts", path.toUtf8().constData()) < 0
         || !muxer) {
@@ -237,12 +251,23 @@ bool writeTsFile(const QString &path, const std::vector<CapturedPacket> &packets
     CBridge::PacketPtr packet(CBridge::makePacket());
     bool ok = true;
     for (const auto &captured : packets) {
+        const std::size_t payloadSize =
+            CBridge::OpusPayloadSanitizer::validPrefixLength(captured.data.data(), captured.data.size());
+        if (payloadSize != captured.data.size()) {
+            if (trimmedPackets) {
+                ++*trimmedPackets;
+            }
+            if (trimmedBytes) {
+                *trimmedBytes += captured.data.size() - payloadSize;
+            }
+        }
+
         av_packet_unref(packet.get());
-        if (av_new_packet(packet.get(), int(captured.data.size())) < 0) {
+        if (av_new_packet(packet.get(), int(payloadSize)) < 0) {
             ok = false;
             break;
         }
-        std::memcpy(packet->data, captured.data.data(), captured.data.size());
+        std::memcpy(packet->data, captured.data.data(), payloadSize);
         packet->stream_index = 0;
         packet->pts = captured.rtpTimestamp;
         packet->dts = captured.rtpTimestamp;
@@ -597,9 +622,18 @@ int main(int argc, char **argv)
         }
 
         const QString tsPath = outputDir + u"/webrtc_audio_capture.ts"_s;
-        if (writeTsFile(tsPath, packets, sampleRate, channelCount)) {
+        std::uint64_t trimmedPackets = 0;
+        std::uint64_t trimmedBytes = 0;
+        if (writeTsFile(tsPath, packets, sampleRate, channelCount, &trimmedPackets, &trimmedBytes)) {
             std::printf("TS written:  %s (play in VLC to check what multicast delivers)\n",
                         qUtf8Printable(tsPath));
+            if (trimmedPackets > 0) {
+                std::printf(
+                    "sanitizer stripped trailing bytes from %llu/%zu packets (%llu bytes) before "
+                    "muxing, matching StreamPipeline\n",
+                    (unsigned long long)trimmedPackets, packets.size(),
+                    (unsigned long long)trimmedBytes);
+            }
         } else {
             std::printf("could not write the TS file\n");
         }
