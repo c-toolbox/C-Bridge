@@ -16,6 +16,11 @@ qt_add_executable(${TARGET_NAME}
   models/streamdraft.cpp
   models/streamdraft.h
 
+  mediamtxmodel.cpp
+  mediamtxmodel.h
+  mediamtxcredentials.cpp
+  mediamtxcredentials.h
+
   core/bridgetypes.cpp
   core/bridgetypes.h
   core/bridgeengine.cpp
@@ -89,6 +94,7 @@ qt_add_qml_module(${TARGET_NAME}
     Main.qml
     SettingsDialog.qml
     StreamEditorPage.qml
+    MediaMTXDialog.qml
     SinkCard.qml
     TsSinkForm.qml
     RtpSinkForm.qml
@@ -151,6 +157,11 @@ if(BUILD_CBRIDGE_WITH_NDI)
   target_compile_definitions(${TARGET_NAME} PRIVATE CBRIDGE_NDI_SUPPORT)
 endif()
 
+if(WIN32)
+  # Windows Credential Manager lookups for MediaMTX server passwords (CredReadW).
+  target_link_libraries(${TARGET_NAME} PRIVATE advapi32)
+endif()
+
 if(MSVC)
   target_compile_options(${TARGET_NAME} PRIVATE
     /permissive-
@@ -194,6 +205,101 @@ if(WIN32 AND FFMPEG_RUNTIME_DIR)
         ${CBRIDGE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:${TARGET_NAME}>"
       COMMAND_EXPAND_LISTS
       VERBATIM
+    )
+  endif()
+endif()
+
+# --- Build-tree deployment ----------------------------------------------------
+# The executable in bin/<Config> must be runnable without any special environment, e.g.
+# double-clicked from Explorer: a bare system PATH has neither the Qt platform plugins
+# (without platforms/qwindows.dll the app aborts during Qt initialization), nor the QML
+# modules it imports, nor libdatachannel's runtime DLLs. Stage them next to the binary
+# after every build so the build-tree executable is self-contained like an installed one.
+option(CBRIDGE_DEPLOY_BUILD_TREE "Deploy Qt plugins/QML modules and third-party runtime DLLs into bin/<Config> after building" ON)
+
+if(WIN32 AND CBRIDGE_DEPLOY_BUILD_TREE)
+  get_target_property(_qmake_executable Qt6::qmake IMPORTED_LOCATION)
+  get_filename_component(_qt_bin_dir "${_qmake_executable}" DIRECTORY)
+  # The QML modules live in a qml/ directory next to bin/ in the Qt installation.
+  get_filename_component(_qt_root_dir "${_qt_bin_dir}" DIRECTORY)
+  set(_qt_qml_dir "${_qt_root_dir}/qml")
+  find_program(CBRIDGE_WINDEPLOYQT_EXECUTABLE NAMES windeployqt HINTS "${_qt_bin_dir}")
+
+  # libdatachannel is a shared vcpkg library; its runtime DLLs (and their transitive
+  # dependencies, e.g. OpenSSL for DTLS/SRTP) live in the triplet's bin directory and are
+  # resolved at configure time so they can be staged next to the executable afterwards.
+  set(CBRIDGE_VCPKG_RUNTIME_DLLS "")
+  if(BUILD_WITH_VCPKG_SUPPORT AND DEFINED ENV{VCPKG_ROOT})
+    file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" _vcpkg_root)
+    if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+      set(_vcpkg_bin_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+    else()
+      set(_vcpkg_bin_dir "${_vcpkg_root}/installed/x64-windows/bin")
+    endif()
+    if(EXISTS "${_vcpkg_bin_dir}/datachannel.dll")
+      file(GET_RUNTIME_DEPENDENCIES
+        EXECUTABLES "${_vcpkg_bin_dir}/datachannel.dll"
+        DIRECTORIES "${_vcpkg_bin_dir}"
+        PRE_EXCLUDE_REGEXES "api-ms|msvcp|vcruntime|kernel32"
+        RESOLVED_DEPENDENCIES_VAR _CBRIDGE_DATACHANNEL_RESOLVED
+        UNRESOLVED_DEPENDENCIES_VAR _CBRIDGE_DATACHANNEL_UNRESOLVED
+      )
+
+      # Keep only the DLLs that actually live in vcpkg's bin directory; system
+      # dependencies (iphlpapi, ws2_32, ...) resolve into C:\Windows and must not be staged.
+      set(CBRIDGE_VCPKG_RUNTIME_DLLS "")
+      string(REPLACE "\\" "/" _CBRIDGE_vcpkg_bin_norm "${_vcpkg_bin_dir}")
+      string(TOLOWER "${_CBRIDGE_vcpkg_bin_norm}" _CBRIDGE_vcpkg_bin_lower)
+      foreach(_dep IN LISTS _CBRIDGE_DATACHANNEL_RESOLVED)
+        get_filename_component(_dep_dir "${_dep}" DIRECTORY)
+        string(TOLOWER "${_dep_dir}" _dep_dir_lower)
+        if(_dep_dir_lower STREQUAL _CBRIDGE_vcpkg_bin_lower)
+          list(APPEND CBRIDGE_VCPKG_RUNTIME_DLLS "${_dep}")
+        endif()
+      endforeach()
+    else()
+      message(WARNING "datachannel.dll not found in ${_vcpkg_bin_dir}; the build-tree executable will need vcpkg's bin directory on PATH.")
+    endif()
+  endif()
+
+  if(CBRIDGE_WINDEPLOYQT_EXECUTABLE)
+    # --qmldir points at the QML sources so windeployqt's import scanner can find every
+    # module the app imports (QtQuick.*, org.kde.kirigami, ...) and deploy their closure.
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+      COMMAND ${CBRIDGE_WINDEPLOYQT_EXECUTABLE} --qmldir "${CMAKE_CURRENT_SOURCE_DIR}" "$<TARGET_FILE:${TARGET_NAME}>"
+      VERBATIM
+      COMMENT "Deploying Qt plugins, QML modules and runtime DLLs next to C-Bridge.exe"
+    )
+  else()
+    message(WARNING "windeployqt not found in ${_qt_bin_dir}; the build-tree executable will need QT_PLUGIN_PATH/PATH set.")
+  endif()
+
+  if(CBRIDGE_VCPKG_RUNTIME_DLLS)
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CBRIDGE_VCPKG_RUNTIME_DLLS} "$<TARGET_FILE_DIR:${TARGET_NAME}>"
+      COMMAND_EXPAND_LISTS
+      VERBATIM
+    )
+  endif()
+
+  if(CBRIDGE_WINDEPLOYQT_EXECUTABLE)
+    # windeployqt only knows about Qt; stage the KDE QML modules it misses (Kirigami loads
+    # e.g. org.kde.desktop dynamically at runtime) plus the KDE Frameworks/Kirigami and
+    # third-party DLLs those plugins need, via a dumpbin import walk of the deployed tree.
+    set(_stage_args
+      -DDEPLOY_EXE="$<TARGET_FILE:${TARGET_NAME}>"
+      -DEXE_DIR="$<TARGET_FILE_DIR:${TARGET_NAME}>"
+      -DQT_BIN_DIR="${_qt_bin_dir}"
+      -DQT_QML_DIR="${_qt_qml_dir}")
+    if(DEFINED _vcpkg_bin_dir)
+      list(APPEND _stage_args -DVCPKG_BIN_DIR="${_vcpkg_bin_dir}")
+    endif()
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} ${_stage_args}
+              -P "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/stage_build_tree_deps.cmake"
+      VERBATIM
+      COMMENT "Staging KDE QML modules and runtime DLLs next to C-Bridge.exe"
     )
   endif()
 endif()

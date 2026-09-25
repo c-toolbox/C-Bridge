@@ -32,6 +32,11 @@ public:
     void setConfig(const BridgeConfig &config);
     const BridgeConfig &config() const { return m_config; }
 
+    /// Session-only password for a stream whose URL carries no embedded credentials. The
+    /// controller resolves it (entered in the editor, or picked up from the Windows
+    /// Credential Manager) and pushes it here before starting the stream.
+    void setStreamPassword(const QString &streamId, const QString &password);
+
     void startAll();
     void stopAll();
     void startStream(const QString &streamId);
@@ -55,6 +60,8 @@ private:
 
     BridgeConfig m_config;
     QHash<QString, StreamPipeline *> m_pipelines;
+    /// Session-only passwords keyed by stream id; never persisted.
+    QHash<QString, QString> m_streamPasswords;
     QHash<QString, StreamStats> m_stats;
     QHash<QString, quint64> m_lastBytesIn;
     QHash<QString, QList<SinkStats>> m_sinkStats;

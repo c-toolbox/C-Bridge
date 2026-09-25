@@ -9,6 +9,7 @@
 
 #include "cbridgesettings.h"
 #include "core/bridgeengine.h"
+#include "mediamtxcredentials.h"
 #include "models/streamlistmodel.h"
 #include "ndi/ndiruntime.h"
 
@@ -43,8 +44,11 @@ BridgeController::BridgeController(QObject *parent)
     , m_engine(new BridgeEngine(this))
     , m_model(new StreamListModel(this))
     , m_draft(new StreamDraft(this))
+    , m_mediaMtxServers(new MediaMtxServersModel(this))
+    , m_mediaMtxStreams(new MediaMtxModel(this))
 {
     m_model->setEngine(m_engine);
+    m_mediaMtxStreams->setServersModel(m_mediaMtxServers);
 
     connect(m_draft, &StreamDraft::changed, this, &BridgeController::recomputeDraftProblems);
 
@@ -176,6 +180,7 @@ void BridgeController::startStreamsOnLoad()
     const bool startAll = CBridgeSettings::startOnLoad();
 
     m_engine->setConfig(m_config);
+    applyStreamPasswords();
     int started = 0;
     for (const StreamConfig &stream : m_config.streams) {
         if (!stream.enabled || !(startAll || streamAutoStart(stream.id))) {
@@ -257,6 +262,7 @@ void BridgeController::startAll()
     }
 
     m_engine->setConfig(m_config);
+    applyStreamPasswords();
     m_engine->startAll();
     setStatusMessage(u"Started"_s);
     Q_EMIT runningChanged();
@@ -272,6 +278,12 @@ void BridgeController::stopAll()
 void BridgeController::startStream(const QString &streamId)
 {
     m_engine->setConfig(m_config);
+    const int index = m_config.indexOfStream(streamId);
+    if (index >= 0) {
+        m_engine->setStreamPassword(streamId, resolvedStreamPassword(m_config.streams.at(index)));
+    } else {
+        m_engine->setStreamPassword(streamId, QString {}); // drop a stale value
+    }
     m_engine->startStream(streamId);
     Q_EMIT runningChanged();
 }
@@ -290,6 +302,66 @@ void BridgeController::addStream(const QString &name, const QString &whepUrl)
     }
     m_draft->setWhepUrl(whepUrl);
     commitEdit();
+}
+
+bool BridgeController::addMediaMtxStream(int streamIndex, const QString &title, bool includeCredentials)
+{
+    if (streamIndex < 0 || streamIndex >= m_mediaMtxStreams->getNumberOfStreams()) {
+        return false;
+    }
+
+    // A path with read authentication cannot be fetched without credentials, so they are
+    // appended to the WHEP URL no matter what the dialog's checkbox says.
+    const int serverIndex = m_mediaMtxStreams->currentServerIndex();
+    if (m_mediaMtxStreams->requiresAuthAt(streamIndex)) {
+        includeCredentials = true;
+        if (serverIndex < 0 || m_mediaMtxServers->username(serverIndex).isEmpty()) {
+            setStatusMessage(u"This path requires read authentication, but its server has no API user configured."_s);
+            return false;
+        }
+        if (!m_mediaMtxServers->hasUsablePassword(serverIndex)) {
+            setStatusMessage(u"This path requires read authentication, but no password is available. "
+                             u"Enter one or store it in the Windows Credential Manager."_s);
+            return false;
+        }
+    }
+
+    const QString whepUrl = m_mediaMtxStreams->whepUrlAt(streamIndex, includeCredentials);
+    if (whepUrl.isEmpty()) {
+        setStatusMessage(u"Could not build a WHEP URL for the selected stream."_s);
+        return false;
+    }
+
+    // The same endpoint is already bridged by another entry in this document.
+    for (const StreamConfig &stream : m_config.streams) {
+        if (stream.whepUrl.toString() == whepUrl) {
+            setStatusMessage(u"\"%1\" is already part of this configuration."_s.arg(stream.name));
+            return false;
+        }
+    }
+
+    beginEditStream({});
+    const QString streamName = title.trimmed();
+    m_draft->setName(streamName.isEmpty() ? m_mediaMtxStreams->nameAt(streamIndex) : streamName);
+    m_draft->setWhepUrl(whepUrl);
+
+    // With embedded credentials the username field must stay empty: WebRtcSource would then
+    // overwrite the lifted user:password with a header that has no password.
+    if (!includeCredentials && serverIndex >= 0) {
+        m_draft->setUsername(m_mediaMtxServers->username(serverIndex));
+    }
+
+    const bool committed = commitEdit();
+    if (committed && !includeCredentials && serverIndex >= 0) {
+        // Carry the server's usable password over to the new entry so it connects right away,
+        // even when that password was only entered for this session and is not in the Windows
+        // Credential Manager yet.
+        const QString serverPassword = m_mediaMtxServers->effectivePassword(serverIndex);
+        if (!serverPassword.isEmpty()) {
+            m_streamPasswords.insert(m_draft->streamId(), serverPassword);
+        }
+    }
+    return committed;
 }
 
 void BridgeController::beginEditStream(const QString &streamId)
@@ -344,6 +416,7 @@ bool BridgeController::commitEdit()
 
     if (wasRunning && edited.enabled) {
         m_engine->setConfig(m_config);
+        m_engine->setStreamPassword(edited.id, resolvedStreamPassword(edited));
         m_engine->startStream(edited.id);
         Q_EMIT runningChanged();
     }
@@ -411,6 +484,7 @@ void BridgeController::removeStream(const QString &streamId)
     }
 
     m_engine->stopStream(streamId);
+    m_streamPasswords.remove(streamId);
     m_config.streams.removeAt(index);
     refreshModel();
     setDirty(true);
@@ -430,6 +504,93 @@ void BridgeController::setStreamEnabled(const QString &streamId, bool enabled)
     }
     refreshModel();
     setDirty(true);
+}
+
+void BridgeController::setStreamPassword(const QString &streamId, const QString &password)
+{
+    if (password.isEmpty()) {
+        m_streamPasswords.remove(streamId);
+    } else {
+        m_streamPasswords.insert(streamId, password);
+    }
+
+    // Keep the engine in sync so a stream restarted later picks up the new value.
+    StreamConfig stream;
+    const int index = m_config.indexOfStream(streamId);
+    if (index >= 0) {
+        stream = m_config.streams.at(index);
+    } else {
+        stream.id = streamId; // A not-yet-committed draft: only the session password applies.
+    }
+    m_engine->setStreamPassword(streamId, resolvedStreamPassword(stream));
+}
+
+bool BridgeController::hasStreamPassword(const QString &streamId) const
+{
+    return !m_streamPasswords.value(streamId).isEmpty();
+}
+
+QString BridgeController::streamPassword(const QString &streamId) const
+{
+    return m_streamPasswords.value(streamId);
+}
+
+int BridgeController::matchingServerIndex(const QUrl &url) const
+{
+    if (!url.isValid() || url.host().isEmpty()) {
+        return -1;
+    }
+    int port = url.port();
+    if (port < 0) {
+        port = url.scheme().compare(u"https"_s, Qt::CaseInsensitive) == 0 ? 443 : 80;
+    }
+
+    for (int i = 0; i < m_mediaMtxServers->getNumberOfServers(); ++i) {
+        const QVariantMap server = m_mediaMtxServers->serverAt(i);
+        if (server.value(u"host"_s).toString() == url.host()
+                && server.value(u"webRtcPort"_s).toInt() == port) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+QString BridgeController::resolvedStreamPassword(const StreamConfig &stream) const
+{
+    if (!m_streamPasswords.value(stream.id).isEmpty()) {
+        return m_streamPasswords.value(stream.id); // a password entered in the editor wins
+    }
+
+    // Fall back to the Windows Credential Manager entry of the MediaMTX server this URL points at.
+    if (stream.username.isEmpty()) {
+        return {};
+    }
+    const int index = matchingServerIndex(stream.whepUrl);
+    if (index < 0) {
+        return {};
+    }
+    QString stored;
+    return MediaMtxCredentials::findStoredPassword(m_mediaMtxServers->name(index), stream.username, stored)
+        ? stored : QString {};
+}
+
+void BridgeController::applyStreamPasswords()
+{
+    for (const StreamConfig &stream : m_config.streams) {
+        m_engine->setStreamPassword(stream.id, resolvedStreamPassword(stream));
+    }
+}
+
+bool BridgeController::hasStoredCredentialFor(const QString &whepUrl, const QString &username) const
+{
+    if (username.isEmpty()) {
+        return false;
+    }
+    const int index = matchingServerIndex(QUrl(whepUrl));
+    if (index < 0) {
+        return false;
+    }
+    return m_mediaMtxServers->hasStoredCredential(m_mediaMtxServers->name(index), username);
 }
 
 QString BridgeController::tsAddressFor(const QString &streamId) const

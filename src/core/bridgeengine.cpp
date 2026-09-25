@@ -41,6 +41,15 @@ void BridgeEngine::setConfig(const BridgeConfig &config)
     m_sinkStats.clear();
 }
 
+void BridgeEngine::setStreamPassword(const QString &streamId, const QString &password)
+{
+    if (password.isEmpty()) {
+        m_streamPasswords.remove(streamId);
+        return;
+    }
+    m_streamPasswords.insert(streamId, password);
+}
+
 void BridgeEngine::startAll()
 {
     for (const StreamConfig &stream : m_config.streams) {
@@ -67,6 +76,13 @@ void BridgeEngine::startStream(const QString &streamId)
     auto *pipeline = new StreamPipeline(m_config.streams.at(index), this);
     connect(pipeline, &StreamPipeline::stateChanged, this, &BridgeEngine::streamStateChanged);
     connect(pipeline, &StreamPipeline::errorOccurred, this, &BridgeEngine::streamError);
+
+    // The URL may carry no embedded credentials; the resolved password was pushed by the
+    // controller before start.
+    const QString password = m_streamPasswords.value(streamId);
+    if (!password.isEmpty()) {
+        pipeline->setPassword(password);
+    }
 
     m_pipelines.insert(streamId, pipeline);
     pipeline->start();

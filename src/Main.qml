@@ -25,6 +25,12 @@ Kirigami.ApplicationWindow {
     width: 1440
     height: 900
 
+    // The C++ context property "controller" is shadowed by the dialogs' own
+    // "property var controller": a binding like "controller: controller" inside an inline
+    // dialog instance resolves to the dialog's own (initially undefined) property, so the
+    // real controller must be handed over through this window-level alias instead.
+    property var bridgeController: controller
+
     Kirigami.Theme.inherit: false
     Kirigami.Theme.colorSet: Kirigami.Theme.Window
 
@@ -58,7 +64,12 @@ Kirigami.ApplicationWindow {
 
     SettingsDialog {
         id: settingsDialog
-        controller: controller
+        controller: root.bridgeController
+    }
+
+    MediaMTXDialog {
+        id: mediaMtxDialog
+        controller: root.bridgeController
     }
 
     Component {
@@ -94,6 +105,11 @@ Kirigami.ApplicationWindow {
                 text: qsTr("Add stream")
                 icon.name: "list-add"
                 onTriggered: root.openEditor("")
+            },
+            Kirigami.Action {
+                text: qsTr("MediaMTX streams…")
+                icon.name: "network-connect"
+                onTriggered: mediaMtxDialog.open()
             },
             Kirigami.Action {
                 text: controller.running ? qsTr("Stop all") : qsTr("Start all")

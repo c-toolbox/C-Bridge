@@ -1,0 +1,26 @@
+{
+    "servers": [
+        {
+            "apiPort": 9997,
+            "apiScheme": "http",
+            "autoDetectWebRtc": true,
+            "enabled": true,
+            "host": "127.0.0.1",
+            "name": "Local MediaMTX",
+            "username": "",
+            "webRtcPort": 8889,
+            "webRtcScheme": "http"
+        },
+        {
+            "apiPort": 9997,
+            "apiScheme": "http",
+            "autoDetectWebRtc": true,
+            "enabled": true,
+            "host": "127.0.0.1",
+            "name": "Mock",
+            "username": "reader",
+            "webRtcPort": 8889,
+            "webRtcScheme": "http"
+        }
+    ]
+}

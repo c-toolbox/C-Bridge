@@ -41,6 +41,12 @@ If a URL is written with embedded credentials —
 `http://user:pass@host:8889/cam1/whep` — C-Bridge lifts them out and sends them in
 an `Authorization: Basic` header instead of leaving them in the request line.
 
+For entries that store only a `username`, the stream editor has a **Password** field.
+That value is kept for the current session only; when the stream starts, C-Bridge uses it if
+present and otherwise looks up the Windows Credential Manager entry of the MediaMTX server the
+URL points at (`MediaMTX/<server>/<user>`). The editor shows a note when such a stored password
+exists.
+
 ## Codec negotiation
 
 C-Bridge offers the codecs in `preferredCodecs` and MediaMTX selects one. The

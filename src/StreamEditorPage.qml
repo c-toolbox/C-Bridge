@@ -15,6 +15,10 @@ Kirigami.ScrollablePage {
 
     title: controller.draftIsNew ? qsTr("New stream") : qsTr("Edit stream")
 
+    // Prefill with a password entered earlier in this session, if any. The value is kept in
+    // memory only and never written to the configuration document.
+    Component.onCompleted: passwordField.text = controller.streamPassword(controller.draft.streamId)
+
     actions: [
         Kirigami.Action {
             text: qsTr("Save")
@@ -65,6 +69,24 @@ Kirigami.ScrollablePage {
                 Kirigami.FormData.label: qsTr("Username:")
                 text: controller.draft.username
                 onTextEdited: controller.draft.username = text
+            }
+
+            Controls.TextField {
+                id: passwordField
+                Kirigami.FormData.label: qsTr("Password:")
+                visible: controller.draft.username !== ""
+                echoMode: Controls.TextField.Password
+                placeholderText: qsTr("Session only, or use the Windows Credential Manager")
+                onTextChanged: controller.setStreamPassword(controller.draft.streamId, text)
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: controller.draft.username !== "" &&
+                         controller.hasStoredCredentialFor(controller.draft.whepUrl, controller.draft.username)
+                color: Kirigami.Theme.positiveTextColor
+                wrapMode: Text.WordWrap
+                text: qsTr("A password for this user is stored in the Windows Credential Manager and will be used automatically.")
             }
 
             Controls.CheckBox {

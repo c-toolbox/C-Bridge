@@ -13,7 +13,7 @@ if(BUILD_WITH_VCPKG_SUPPORT AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
 endif()
 
 project(c-bridge
-  VERSION 0.1.0
+  VERSION 0.2.0
   DESCRIPTION "Multi-stream WebRTC gateway: MPEG-TS multicast and NDI output"
   LANGUAGES CXX
 )
