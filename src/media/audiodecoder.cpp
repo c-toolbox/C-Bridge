@@ -65,23 +65,41 @@ int AudioDecoder::channels() const
 
 bool AudioDecoder::open(int sampleRate, int channels, QString *error)
 {
-    close();
+    return open(AudioCodec::Opus, sampleRate, channels, QByteArray(), error);
+}
 
-    // Prefer the libopus wrapper: it decodes raw RFC 6716 packets directly and never mistakes a
-    // leading TOC byte for an in-band configuration header. When this FFmpeg build has no such
-    // decoder, fall back to the internal one, which needs a valid OpusHead (see below) before it
-    // will accept unencapsulated network streams.
-    const AVCodec *decoder = avcodec_find_decoder_by_name("libopus");
-    bool usingInternalDecoder = true;
-    if (decoder && decoder->id == AV_CODEC_ID_OPUS) {
-        usingInternalDecoder = false;
+bool AudioDecoder::open(AudioCodec codec, int sampleRate, int channels,
+                        const QByteArray &extradata, QString *error)
+{
+    close();
+    m_isOpus = codec == AudioCodec::Opus || codec == AudioCodec::Unknown;
+
+    const AVCodec *decoder = nullptr;
+    bool usingInternalOpusDecoder = false;
+    if (m_isOpus) {
+        // Prefer the libopus wrapper: it decodes raw RFC 6716 packets directly and never
+        // mistakes a leading TOC byte for an in-band configuration header. When this FFmpeg
+        // build has no such decoder, fall back to the internal one, which needs a valid
+        // OpusHead (see below) before it will accept unencapsulated network streams.
+        decoder = avcodec_find_decoder_by_name("libopus");
+        usingInternalOpusDecoder = true;
+        if (decoder && decoder->id == AV_CODEC_ID_OPUS) {
+            usingInternalOpusDecoder = false;
+        } else {
+            decoder = avcodec_find_decoder(AV_CODEC_ID_OPUS);
+        }
     } else {
-        decoder = avcodec_find_decoder(AV_CODEC_ID_OPUS);
+        // FFmpeg's native aac decoder handles ADTS, raw ASC-framed and LATM streams
+        // uniformly and tolerates the truncated frames that are routine on lossy SRT
+        // links, so it is preferred over any hwaccel/libfdk wrapper.
+        decoder = avcodec_find_decoder(codec == AudioCodec::AacLatm ? AV_CODEC_ID_AAC_LATM
+                                                                     : AV_CODEC_ID_AAC);
     }
 
     if (!decoder) {
         if (error) {
-            *error = u"No Opus decoder is available in this FFmpeg build"_s;
+            *error = m_isOpus ? u"No Opus decoder is available in this FFmpeg build"_s
+                              : u"No AAC decoder is available in this FFmpeg build"_s;
         }
         return false;
     }
@@ -99,7 +117,7 @@ bool AudioDecoder::open(int sampleRate, int channels, QString *error)
     av_channel_layout_default(&m_context->ch_layout, channels);
     m_context->request_sample_fmt = AV_SAMPLE_FMT_FLTP;
 
-    if (usingInternalDecoder) {
+    if (usingInternalOpusDecoder) {
         // Without extradata the internal decoder hunts for an in-band OpusHead and misreads the
         // first raw packet's TOC byte as a multichannel configuration header, then aborts. A
         // standard header with mapping family 0 tells it to treat the stream as plain RFC 6716.
@@ -115,12 +133,28 @@ bool AudioDecoder::open(int sampleRate, int channels, QString *error)
         }
         std::memcpy(m_context->extradata, head.data(), head.size());
         m_context->extradata_size = int(head.size());
+    } else if (!m_isOpus && !extradata.isEmpty()) {
+        // AAC in a TS container usually arrives as ADTS, which is self-describing and needs
+        // no extradata. LATM/LOAS (or a demuxer that already extracted the config) hands us
+        // the AudioSpecificConfig, which the decoder needs before the first frame.
+        m_context->extradata = static_cast<std::uint8_t *>(
+            av_mallocz(size_t(extradata.size()) + AV_INPUT_BUFFER_PADDING_SIZE));
+        if (!m_context->extradata) {
+            if (error) {
+                *error = u"Out of memory allocating the AAC config"_s;
+            }
+            m_context.reset();
+            return false;
+        }
+        std::memcpy(m_context->extradata, extradata.constData(), size_t(extradata.size()));
+        m_context->extradata_size = int(extradata.size());
     }
 
     const int ret = avcodec_open2(m_context.get(), decoder, nullptr);
     if (ret < 0) {
         if (error) {
-            *error = u"Could not open the Opus decoder: %1"_s.arg(avErrorString(ret));
+            *error = u"Could not open the %1 decoder: %2"_s
+                         .arg(m_isOpus ? u"Opus"_s : u"AAC"_s, avErrorString(ret));
         }
         m_context.reset();
         return false;
@@ -161,10 +195,11 @@ bool AudioDecoder::decode(const std::uint8_t *data, std::size_t size, std::int64
     // extra byte to their Opus RTP payloads, which makes two-CBR-frame packets structurally
     // invalid: opus_packet_parse_impl() rejects any odd length after the TOC byte. Try the full
     // packet first and fall back to dropping the trailing byte before giving up on a frame.
+    // This is an Opus-only quirk; AAC frames are length-delimited and must not be truncated.
     if (decodePacket(data, size, pts, error)) {
         return true;
     }
-    if (size > 1) {
+    if (m_isOpus && size > 1) {
         QString retryError;
         if (decodePacket(data, size - 1, pts, &retryError)) {
             ++m_trailingByteRetries;

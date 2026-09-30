@@ -72,6 +72,10 @@ private:
     qint64 m_audioLastRaw = -1;
     qint64 m_audioOffset = 0;
 
+    /// RTP clock of the audio stream (48 kHz for Opus, the stream rate for AAC). Set in
+    /// addAudioStream() so writeAudio() rebases timestamps on the right clock.
+    int m_audioClock = 48000;
+
     /// Both streams are anchored to the first video timestamp so they share a zero.
     qint64 m_ptsBase = -1;
 

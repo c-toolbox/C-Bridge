@@ -48,6 +48,17 @@ void StreamDraft::setEnabled(bool enabled)
     Q_EMIT changed();
 }
 
+void StreamDraft::setSourceKind(const QString &kind)
+{
+    const SourceKind parsed = sourceKindFromString(kind);
+    if (m_config.sourceKind == parsed) {
+        return;
+    }
+    m_config.sourceKind = parsed;
+    Q_EMIT sourceKindChanged();
+    Q_EMIT changed();
+}
+
 void StreamDraft::setWhepUrl(const QString &url)
 {
     const QUrl parsed(url);
@@ -66,6 +77,70 @@ void StreamDraft::setUsername(const QString &username)
     }
     m_config.username = username;
     Q_EMIT usernameChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setSrtCaller(bool caller)
+{
+    const SrtSourceConfig::Mode mode = caller ? SrtSourceConfig::Mode::Caller : SrtSourceConfig::Mode::Listener;
+    if (m_config.srt.mode == mode) {
+        return;
+    }
+    m_config.srt.mode = mode;
+    Q_EMIT srtModeChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setSrtHost(const QString &host)
+{
+    if (m_config.srt.host == host) {
+        return;
+    }
+    m_config.srt.host = host.trimmed();
+    Q_EMIT srtHostChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setSrtPort(int port)
+{
+    const int clamped = qBound(1, port, 65535);
+    if (int(m_config.srt.port) == clamped) {
+        return;
+    }
+    m_config.srt.port = quint16(clamped);
+    Q_EMIT srtPortChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setSrtPassphrase(const QString &passphrase)
+{
+    if (m_config.srt.passphrase == passphrase) {
+        return;
+    }
+    m_config.srt.passphrase = passphrase;
+    Q_EMIT srtPassphraseChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setSrtLatencyMs(int ms)
+{
+    const int clamped = qBound(0, ms, 60000);
+    if (m_config.srt.latencyMs == clamped) {
+        return;
+    }
+    m_config.srt.latencyMs = clamped;
+    Q_EMIT srtLatencyMsChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setSrtStreamId(const QString &streamId)
+{
+    const QString trimmed = streamId.trimmed();
+    if (m_config.srt.streamId == trimmed) {
+        return;
+    }
+    m_config.srt.streamId = trimmed;
+    Q_EMIT srtStreamIdChanged();
     Q_EMIT changed();
 }
 
@@ -128,8 +203,15 @@ void StreamDraft::load(const StreamConfig &config)
 
     Q_EMIT nameChanged();
     Q_EMIT enabledChanged();
+    Q_EMIT sourceKindChanged();
     Q_EMIT whepUrlChanged();
     Q_EMIT usernameChanged();
+    Q_EMIT srtModeChanged();
+    Q_EMIT srtHostChanged();
+    Q_EMIT srtPortChanged();
+    Q_EMIT srtPassphraseChanged();
+    Q_EMIT srtLatencyMsChanged();
+    Q_EMIT srtStreamIdChanged();
     Q_EMIT audioEnabledChanged();
     Q_EMIT preferredCodecsChanged();
     Q_EMIT reconnectInitialMsChanged();

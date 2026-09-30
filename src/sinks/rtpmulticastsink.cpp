@@ -42,6 +42,27 @@ AVCodecID toAvCodecId(VideoCodec codec)
     return AV_CODEC_ID_NONE;
 }
 
+AVCodecID toAvCodecId(AudioCodec codec)
+{
+    switch (codec) {
+    case AudioCodec::Opus: return AV_CODEC_ID_OPUS;
+    case AudioCodec::Aac: return AV_CODEC_ID_AAC;
+    case AudioCodec::AacLatm: return AV_CODEC_ID_AAC_LATM;
+    case AudioCodec::Unknown: break;
+    }
+    return AV_CODEC_ID_NONE;
+}
+
+/// Size of the ADTS frame header (7 bytes, or 9 when the optional CRC is present), or 0
+/// when the buffer does not begin with an ADTS syncword.
+std::size_t adtsHeaderLength(const std::uint8_t *data, std::size_t size)
+{
+    if (size < 7 || data[0] != 0xFF || (data[1] & 0xF0) != 0xF0) {
+        return 0;
+    }
+    return (data[1] & 0x01) ? std::size_t(7) : std::size_t(9);
+}
+
 } // namespace
 
 RtpMulticastSink::RtpMulticastSink(RtpMulticastSinkConfig config)
@@ -77,10 +98,28 @@ QString RtpMulticastSink::buildUrl(const RtpMulticastSinkConfig &config, quint16
 
 bool RtpMulticastSink::openStream(RtpStreamContext &stream, const QString &url, VideoCodec codec,
                                   int width, int height, const std::uint8_t *extradata, std::size_t extradataSize,
-                                  int sampleRate, int channels, QString *error)
+                                  AudioCodec audioCodec, int sampleRate, int channels,
+                                  const QByteArray &audioExtradata, QString *error)
 {
-    // Unknown selects the Opus audio stream; H264/H265 select the video stream.
-    const AVCodecID codecId = (codec == VideoCodec::Unknown) ? AV_CODEC_ID_OPUS : toAvCodecId(codec);
+    // Unknown selects the audio stream, whose codec is audioCodec; H264/H265 select video.
+    const bool audio = codec == VideoCodec::Unknown;
+    const AVCodecID codecId = audio ? toAvCodecId(audioCodec) : toAvCodecId(codec);
+
+    // FFmpeg's RTP muxer has no payload type for LATM/LOAS, so that variant cannot be
+    // served on the raw RTP path (the TS and RTSP sinks handle it).
+    if (audio && codecId == AV_CODEC_ID_AAC_LATM) {
+        if (error) {
+            *error = u"The raw RTP sink cannot serve AAC LATM audio"_s;
+        }
+        return false;
+    }
+    // The RTP muxer rejects AAC without global headers, so the AudioSpecificConfig is required.
+    if (audio && codecId == AV_CODEC_ID_AAC && audioExtradata.isEmpty()) {
+        if (error) {
+            *error = u"The raw RTP sink needs an AAC AudioSpecificConfig"_s;
+        }
+        return false;
+    }
 
     const QByteArray utf8Url = url.toUtf8();
 
@@ -103,10 +142,26 @@ bool RtpMulticastSink::openStream(RtpStreamContext &stream, const QString &url, 
 
     AVCodecParameters *parameters = avStream->codecpar;
     parameters->codec_id = codecId;
-    if (codecId == AV_CODEC_ID_OPUS) {
+    if (audio) {
         parameters->codec_type = AVMEDIA_TYPE_AUDIO;
         parameters->sample_rate = sampleRate;
         av_channel_layout_default(&parameters->ch_layout, channels);
+        if (codecId == AV_CODEC_ID_AAC) {
+            parameters->extradata = static_cast<uint8_t *>(
+                av_mallocz(size_t(audioExtradata.size()) + AV_INPUT_BUFFER_PADDING_SIZE));
+            if (!parameters->extradata) {
+                if (error) {
+                    *error = u"Out of memory allocating the AAC config"_s;
+                }
+                closeStream(stream);
+                return false;
+            }
+            std::memcpy(parameters->extradata, audioExtradata.constData(),
+                        size_t(audioExtradata.size()));
+            parameters->extradata_size = int(audioExtradata.size());
+            // MPEG4-GENERIC carries raw AAC frames, so the ADTS header is removed per packet.
+            stream.stripAdtsHeader = true;
+        }
     } else {
         parameters->codec_type = AVMEDIA_TYPE_VIDEO;
         parameters->width = width;
@@ -131,8 +186,9 @@ bool RtpMulticastSink::openStream(RtpStreamContext &stream, const QString &url, 
     }
 
     // The rtp muxer sets its own pts info in write_header (32-bit, 90 kHz video /
-    // 48 kHz audio); setting it here documents the clock the timestamps are on.
-    avStream->time_base = AVRational { 1, codecId == AV_CODEC_ID_OPUS ? kRtpAudioClock : kRtpVideoClock };
+    // audio sample rate); setting it here documents the clock the timestamps are on.
+    avStream->time_base = AVRational { 1, audio ? (sampleRate > 0 ? sampleRate : kRtpAudioClock)
+                                                : kRtpVideoClock };
 
     // Same as the RTSP sink: without this flag FFmpeg 8's RTP muxer holds packets in its
     // interleave queue and nothing reaches the wire until close.
@@ -187,6 +243,7 @@ void RtpMulticastSink::closeStream(RtpStreamContext &stream)
     stream.lastRaw = -1;
     stream.offset = 0;
     stream.base = -1;
+    stream.stripAdtsHeader = false;
 }
 
 bool RtpMulticastSink::open(const StreamFormat &format, QString *error)
@@ -203,15 +260,17 @@ bool RtpMulticastSink::open(const StreamFormat &format, QString *error)
     const QString videoUrl = buildUrl(m_config, m_config.port);
     if (!openStream(m_video, videoUrl, format.videoCodec, format.width, format.height,
                     reinterpret_cast<const std::uint8_t *>(format.videoExtradata.constData()),
-                    size_t(format.videoExtradata.size()), 0, 0, error)) {
+                    size_t(format.videoExtradata.size()), AudioCodec::Unknown, 0, 0, QByteArray(),
+                    error)) {
         close();
         return false;
     }
 
     if (format.hasAudio) {
         const QString audioUrl = buildUrl(m_config, quint16(int(m_config.port) + 1));
-        if (!openStream(m_audio, audioUrl, VideoCodec::Unknown, 0, 0, nullptr, 0, format.audioSampleRate,
-                        format.audioChannels, error)) {
+        if (!openStream(m_audio, audioUrl, VideoCodec::Unknown, 0, 0, nullptr, 0,
+                        format.audioCodec, format.audioSampleRate, format.audioChannels,
+                        format.audioExtradata, error)) {
             close();
             return false;
         }
@@ -303,6 +362,16 @@ bool RtpMulticastSink::writeAudio(const std::uint8_t *data, std::size_t size, st
     const qint64 absolute = unwrapTimestamp(rtpTimestamp, m_audio);
     if (m_audio.base < 0) {
         m_audio.base = absolute;
+    }
+
+    // MPEG4-GENERIC carries raw AAC frames. The SRT demuxer hands us ADTS, so drop the
+    // header; a stream that already carries raw frames (syncword absent) is passed through.
+    if (m_audio.stripAdtsHeader) {
+        const std::size_t header = adtsHeaderLength(data, size);
+        if (header > 0 && size > header) {
+            data += header;
+            size -= header;
+        }
     }
 
     // Each RTP stream has its own base timestamp and SSRC, so audio is rebased to its

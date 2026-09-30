@@ -311,7 +311,8 @@ bool BridgeController::addMediaMtxStream(int streamIndex, const QString &title, 
     }
 
     // A path with read authentication cannot be fetched without credentials, so they are
-    // appended to the WHEP URL no matter what the dialog's checkbox says.
+    // embedded no matter what the dialog's checkbox says: in the WHEP URL for WebRTC paths and
+    // in the SRT streamid for SRT paths.
     const int serverIndex = m_mediaMtxStreams->currentServerIndex();
     if (m_mediaMtxStreams->requiresAuthAt(streamIndex)) {
         includeCredentials = true;
@@ -326,15 +327,48 @@ bool BridgeController::addMediaMtxStream(int streamIndex, const QString &title, 
         }
     }
 
-    const QString whepUrl = m_mediaMtxStreams->whepUrlAt(streamIndex, includeCredentials);
-    if (whepUrl.isEmpty()) {
-        setStatusMessage(u"Could not build a WHEP URL for the selected stream."_s);
-        return false;
+    // A path fed over SRT is bridged over SRT: C-Bridge dials the server's own SRT port as a
+    // caller with streamid "read:<path>" instead of going through WHEP. That avoids WebRTC
+    // codec negotiation entirely and keeps the bitstream untouched, like every other sink path.
+    const bool srtPath = m_mediaMtxStreams->isSrtPathAt(streamIndex);
+
+    if (srtPath && !includeCredentials) {
+        // The streamid is the only channel for SRT read credentials, so embed them whenever the
+        // server entry has usable ones — even when the dialog's checkbox is off. A path that
+        // requires auth must not fail at runtime because of an unchecked box; on open paths the
+        // extra credentials are harmless (an "any" user matches regardless).
+        if (serverIndex >= 0 && m_mediaMtxServers->hasUsableCredentials(serverIndex)) {
+            includeCredentials = true;
+        }
+    }
+
+    QString endpointFingerprint;
+    QVariantMap srtEndpoint;
+    if (srtPath) {
+        srtEndpoint = m_mediaMtxStreams->srtReadEndpointAt(streamIndex, includeCredentials);
+        const QString host = srtEndpoint.value(u"host"_s).toString();
+        if (host.isEmpty()) {
+            setStatusMessage(u"Could not build an SRT endpoint for the selected stream."_s);
+            return false;
+        }
+        endpointFingerprint = u"srt://%1:%2?streamid=%3"_s.arg(host)
+            .arg(srtEndpoint.value(u"port"_s).toInt())
+            .arg(srtEndpoint.value(u"streamId"_s).toString());
+    } else {
+        const QString whepUrl = m_mediaMtxStreams->whepUrlAt(streamIndex, includeCredentials);
+        if (whepUrl.isEmpty()) {
+            setStatusMessage(u"Could not build a WHEP URL for the selected stream."_s);
+            return false;
+        }
+        endpointFingerprint = whepUrl;
     }
 
     // The same endpoint is already bridged by another entry in this document.
     for (const StreamConfig &stream : m_config.streams) {
-        if (stream.whepUrl.toString() == whepUrl) {
+        const QString existing = stream.sourceKind == SourceKind::Srt
+            ? u"srt://%1:%2?streamid=%3"_s.arg(stream.srt.host).arg(int(stream.srt.port)).arg(stream.srt.streamId)
+            : stream.whepUrl.toString();
+        if (existing == endpointFingerprint) {
             setStatusMessage(u"\"%1\" is already part of this configuration."_s.arg(stream.name));
             return false;
         }
@@ -343,16 +377,27 @@ bool BridgeController::addMediaMtxStream(int streamIndex, const QString &title, 
     beginEditStream({});
     const QString streamName = title.trimmed();
     m_draft->setName(streamName.isEmpty() ? m_mediaMtxStreams->nameAt(streamIndex) : streamName);
-    m_draft->setWhepUrl(whepUrl);
 
-    // With embedded credentials the username field must stay empty: WebRtcSource would then
-    // overwrite the lifted user:password with a header that has no password.
-    if (!includeCredentials && serverIndex >= 0) {
-        m_draft->setUsername(m_mediaMtxServers->username(serverIndex));
+    if (srtPath) {
+        // Credentials are embedded in the streamid, so no separate username/password is needed.
+        m_draft->setSourceKind(u"srt"_s);
+        m_draft->setSrtCaller(true);
+        m_draft->setSrtHost(srtEndpoint.value(u"host"_s).toString());
+        const QVariant srtPort = srtEndpoint.value(u"port"_s);
+        m_draft->setSrtPort(quint16(srtPort.isValid() ? srtPort.toInt() : 8890)); // MediaMTX default
+        m_draft->setSrtStreamId(srtEndpoint.value(u"streamId"_s).toString());
+    } else {
+        m_draft->setWhepUrl(endpointFingerprint);
+
+        // With embedded credentials the username field must stay empty: WebRtcSource would then
+        // overwrite the lifted user:password with a header that has no password.
+        if (!includeCredentials && serverIndex >= 0) {
+            m_draft->setUsername(m_mediaMtxServers->username(serverIndex));
+        }
     }
 
     const bool committed = commitEdit();
-    if (committed && !includeCredentials && serverIndex >= 0) {
+    if (committed && !srtPath && !includeCredentials && serverIndex >= 0) {
         // Carry the server's usable password over to the new entry so it connects right away,
         // even when that password was only entered for this session and is not in the Windows
         // Credential Manager yet.

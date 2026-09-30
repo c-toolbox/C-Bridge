@@ -24,6 +24,8 @@ Q_ENUM_NS(VideoCodec)
 enum class AudioCodec {
     Unknown,
     Opus,
+    Aac,      // ADTS AAC (AV_CODEC_ID_AAC)
+    AacLatm,  // AAC LATM/LOAS (AV_CODEC_ID_AAC_LATM)
 };
 Q_ENUM_NS(AudioCodec)
 
@@ -34,6 +36,12 @@ enum class SinkKind {
     Ndi,         // NDI source (decode + re-encode)
 };
 Q_ENUM_NS(SinkKind)
+
+enum class SourceKind {
+    Whep, // WHEP/WebRTC pull from MediaMTX
+    Srt,  // SRT receive: MPEG-TS over the srt:// protocol
+};
+Q_ENUM_NS(SourceKind)
 
 enum class StreamState {
     Idle,
@@ -51,7 +59,12 @@ VideoCodec videoCodecFromString(const QString &text);
 QString toString(SinkKind kind);
 SinkKind sinkKindFromString(const QString &text, bool *ok = nullptr);
 
+QString toString(SourceKind kind);
+SourceKind sourceKindFromString(const QString &text, bool *ok = nullptr);
+
 QString toString(StreamState state);
+
+QString toString(AudioCodec codec);
 
 /// Per-sink counters sampled alongside StreamStats.
 struct SinkStats {

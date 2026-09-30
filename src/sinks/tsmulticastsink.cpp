@@ -22,7 +22,7 @@ namespace CBridge {
 namespace {
 
 constexpr int kRtpVideoClock = 90000; // also the MPEG-TS timebase
-constexpr int kRtpAudioClock = 48000; // Opus
+constexpr int kRtpAudioClock = 48000; // default audio clock (Opus is always 48 kHz)
 constexpr qint64 kRtpWrap = 1LL << 32;
 
 QString avError(int code)
@@ -40,6 +40,23 @@ AVCodecID toAvCodecId(VideoCodec codec)
     case VideoCodec::Unknown: break;
     }
     return AV_CODEC_ID_NONE;
+}
+
+AVCodecID toAvCodecId(AudioCodec codec)
+{
+    switch (codec) {
+    case AudioCodec::Opus: return AV_CODEC_ID_OPUS;
+    case AudioCodec::Aac: return AV_CODEC_ID_AAC;
+    case AudioCodec::AacLatm: return AV_CODEC_ID_AAC_LATM;
+    case AudioCodec::Unknown: break;
+    }
+    return AV_CODEC_ID_NONE;
+}
+
+/// The RTP clock the audio stream runs on: Opus is fixed at 48 kHz, AAC at its own rate.
+int audioClockRate(const StreamFormat &format)
+{
+    return format.audioSampleRate > 0 ? format.audioSampleRate : kRtpAudioClock;
 }
 
 } // namespace
@@ -105,11 +122,25 @@ bool TsMulticastSink::addAudioStream(const StreamFormat &format, QString *error)
 
     AVCodecParameters *parameters = m_audioStream->codecpar;
     parameters->codec_type = AVMEDIA_TYPE_AUDIO;
-    parameters->codec_id = AV_CODEC_ID_OPUS;
+    parameters->codec_id = toAvCodecId(format.audioCodec);
     parameters->sample_rate = format.audioSampleRate;
     av_channel_layout_default(&parameters->ch_layout, format.audioChannels);
+    if (!format.audioExtradata.isEmpty()) {
+        parameters->extradata = static_cast<uint8_t *>(
+            av_mallocz(size_t(format.audioExtradata.size()) + AV_INPUT_BUFFER_PADDING_SIZE));
+        if (!parameters->extradata) {
+            if (error) {
+                *error = u"Out of memory allocating audio extradata"_s;
+            }
+            return false;
+        }
+        std::memcpy(parameters->extradata, format.audioExtradata.constData(),
+                    size_t(format.audioExtradata.size()));
+        parameters->extradata_size = int(format.audioExtradata.size());
+    }
 
-    m_audioStream->time_base = AVRational { 1, kRtpAudioClock };
+    m_audioClock = audioClockRate(format);
+    m_audioStream->time_base = AVRational { 1, m_audioClock };
     return true;
 }
 
@@ -204,6 +235,7 @@ void TsMulticastSink::close()
 
     m_videoStream = nullptr;
     m_audioStream = nullptr;
+    m_audioClock = 48000;
     m_open = false;
 }
 
@@ -283,10 +315,12 @@ bool TsMulticastSink::writeAudio(const std::uint8_t *data, std::size_t size,
 
     const qint64 absolute = unwrap(rtpTimestamp, m_audioLastRaw, m_audioOffset);
 
-    // The audio clock is 48 kHz while m_ptsBase is on the 90 kHz video clock, so
-    // rebase in the video domain and express the result in the audio timebase.
-    const qint64 videoDomain = av_rescale(absolute, kRtpVideoClock, kRtpAudioClock);
-    const qint64 rebased = av_rescale(videoDomain - m_ptsBase, kRtpAudioClock, kRtpVideoClock);
+    // The audio clock is the stream's sample rate (48 kHz for Opus, whatever the demuxer
+    // reported for AAC) while m_ptsBase is on the 90 kHz video clock, so rebase in the
+    // video domain and express the result in the audio timebase.
+    const int audioClock = m_audioClock > 0 ? m_audioClock : kRtpAudioClock;
+    const qint64 videoDomain = av_rescale(absolute, kRtpVideoClock, audioClock);
+    const qint64 rebased = av_rescale(videoDomain - m_ptsBase, audioClock, kRtpVideoClock);
 
     return writePacket(m_audioStream, data, size, rebased, true);
 }

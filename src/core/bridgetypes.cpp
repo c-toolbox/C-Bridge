@@ -68,6 +68,33 @@ SinkKind sinkKindFromString(const QString &text, bool *ok)
     return SinkKind::TsMulticast;
 }
 
+QString toString(SourceKind kind)
+{
+    switch (kind) {
+    case SourceKind::Whep: return u"whep"_s;
+    case SourceKind::Srt: return u"srt"_s;
+    }
+    return u"unknown"_s;
+}
+
+SourceKind sourceKindFromString(const QString &text, bool *ok)
+{
+    const QString normalized = text.trimmed().toLower();
+    if (ok) {
+        *ok = true;
+    }
+    if (normalized == u"whep"_s || normalized == u"webrtc"_s) {
+        return SourceKind::Whep;
+    }
+    if (normalized == u"srt"_s) {
+        return SourceKind::Srt;
+    }
+    if (ok) {
+        *ok = false;
+    }
+    return SourceKind::Whep;
+}
+
 QString toString(StreamState state)
 {
     switch (state) {
@@ -79,6 +106,17 @@ QString toString(StreamState state)
     case StreamState::Stopping: return u"Stopping"_s;
     }
     return u"Unknown"_s;
+}
+
+QString toString(AudioCodec codec)
+{
+    switch (codec) {
+    case AudioCodec::Opus: return u"opus"_s;
+    case AudioCodec::Aac: return u"aac"_s;
+    case AudioCodec::AacLatm: return u"aac_latm"_s;
+    case AudioCodec::Unknown: break;
+    }
+    return u"unknown"_s;
 }
 
 } // namespace CBridge

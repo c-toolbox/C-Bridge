@@ -7,8 +7,10 @@
 
 #pragma once
 
+#include "core/bridgetypes.h"
 #include "media/avwrappers.h"
 
+#include <QByteArray>
 #include <QString>
 
 #include <cstdint>
@@ -16,7 +18,7 @@
 
 namespace CBridge {
 
-/// Decodes Opus packets to planar float, which is already NDI's audio layout.
+/// Decodes Opus or AAC packets to planar float, which is already NDI's audio layout.
 class AudioDecoder
 {
 public:
@@ -29,6 +31,14 @@ public:
     AudioDecoder &operator=(const AudioDecoder &) = delete;
 
     bool open(int sampleRate, int channels, QString *error);
+
+    /// Opens the decoder for a specific audio codec. AAC packets are self-describing
+    /// (ADTS) or carry their config in `extradata` (an AudioSpecificConfig for LATM/LOAS);
+    /// `extradata` is ignored for Opus, which builds its own OpusHead. The three-argument
+    /// open() above is the Opus convenience used by the tests and the WHEP path.
+    bool open(AudioCodec codec, int sampleRate, int channels, const QByteArray &extradata,
+              QString *error);
+
     void close();
     bool isOpen() const { return m_context != nullptr; }
 
@@ -61,6 +71,7 @@ private:
 
     CodecContextPtr m_context;
     QString m_decoderName;
+    bool m_isOpus = true;
     std::uint64_t m_trailingByteRetries = 0;
     FramePtr m_frame;
     PacketPtr m_packet;

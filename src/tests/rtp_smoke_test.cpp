@@ -102,22 +102,13 @@ void drainSocket(QUdpSocket &udp, int *mediaCount, std::uint32_t *ssrc, bool *ss
 
 } // namespace
 
-int main(int argc, char **argv)
+/// Opens the sink against loopback unicast, feeds video and audio, and verifies RTP
+/// datagrams arrive on both ports. Parameterised on the audio codec so the Opus and AAC
+/// passthrough paths are both covered.
+static void runCase(int videoPort, int audioPort, CBridge::AudioCodec audioCodec,
+                    const QByteArray &audioExtradata, const std::uint8_t *audioPacket,
+                    std::size_t audioPacketSize, int audioStep, const char *label)
 {
-    QCoreApplication app(argc, argv);
-    std::setvbuf(stdout, nullptr, _IONBF, 0); // keep progress visible if something hangs
-    progress("main: starting");
-
-    const int videoPort = 38900;
-    const int audioPort = 38901;
-
-    QUdpSocket videoUdp;
-    QUdpSocket audioUdp;
-    if (!videoUdp.bind(QHostAddress::LocalHost, videoPort) || !audioUdp.bind(QHostAddress::LocalHost, audioPort)) {
-        logLine("FAIL: could not bind the test UDP sockets");
-        return 1;
-    }
-
     // The rtp muxer over udp:// accepts any destination IP, so loopback unicast stands
     // in for the multicast group and keeps the test independent of the network stack.
     CBridge::RtpMulticastSinkConfig config;
@@ -137,28 +128,36 @@ int main(int argc, char **argv)
         0x00, 0x00, 0x01, 0x65, 0x98, 0x42, 0xE0              // IDR slice (I), poc_lsb 0
     };
 
+    QUdpSocket videoUdp;
+    QUdpSocket audioUdp;
+    if (!videoUdp.bind(QHostAddress::LocalHost, videoPort)
+        || !audioUdp.bind(QHostAddress::LocalHost, audioPort)) {
+        logLine("FAIL: could not bind the test UDP sockets");
+        ++g_failures;
+        return;
+    }
+
     CBridge::StreamFormat format;
     format.videoCodec = CBridge::VideoCodec::H264;
     format.width = 1920;
     format.height = 1080;
     format.hasAudio = true;
+    format.audioCodec = audioCodec;
     format.audioSampleRate = 48000;
     format.audioChannels = 2;
+    format.audioExtradata = audioExtradata;
 
     // The extradata is the Annex-B parameter sets (SPS + PPS), as the pipeline provides.
     format.videoExtradata = QByteArray(reinterpret_cast<const char *>(kH264Keyframe), 15);
 
-    progress("opening sink");
+    progress(label);
     QString error;
     if (!sink.open(format, &error)) {
-        logLine(("FAIL: open: " + error).toUtf8().constData());
-        return 1;
+        logLine((QString("FAIL: open: ") + error).toUtf8().constData());
+        ++g_failures;
+        return;
     }
     check(true, "sink opened (video and audio contexts)");
-
-    // A plausible Opus packet (SILK-FB stereo TOC byte); the raw RTP path copies it
-    // verbatim, so the payload content is irrelevant here.
-    static const std::uint8_t kOpusPacket[] = { 0xFC, 0x01 };
 
     progress("feeding video and audio frames");
     int videoMedia = 0;
@@ -173,8 +172,8 @@ int main(int argc, char **argv)
         sink.writeVideo(kH264Keyframe, sizeof(kH264Keyframe), videoTimestamp, keyframe);
         videoTimestamp += 3000; // 30 fps on the 90 kHz RTP clock
 
-        sink.writeAudio(kOpusPacket, sizeof(kOpusPacket), audioTimestamp);
-        audioTimestamp += 960; // 20 ms frames on the 48 kHz Opus clock
+        sink.writeAudio(audioPacket, audioPacketSize, audioTimestamp);
+        audioTimestamp += quint32(audioStep); // one frame on the audio clock
 
         if (videoUdp.waitForReadyRead(100)) {
             drainSocket(videoUdp, &videoMedia, &videoSsrc, &ssrcConsistent);
@@ -203,6 +202,53 @@ int main(int argc, char **argv)
 
     videoUdp.close();
     audioUdp.close();
+}
+
+int main(int argc, char **argv)
+{
+    QCoreApplication app(argc, argv);
+    std::setvbuf(stdout, nullptr, _IONBF, 0); // keep progress visible if something hangs
+    progress("main: starting");
+
+    // A plausible Opus packet (SILK-FB stereo TOC byte); the raw RTP path copies it
+    // verbatim, so the payload content is irrelevant here.
+    static const std::uint8_t kOpusPacket[] = { 0xFC, 0x01 };
+
+    // An ADTS-framed AAC access unit: the 7-byte header (MPEG-4, AAC-LC, 48 kHz, stereo,
+    // protection_absent) followed by a raw frame body. The sink must strip the header and
+    // hand the muxer the MPEG4-GENERIC payload instead.
+    static const std::uint8_t kAdtsPacket[] = {
+        0xFF, 0xF1, 0x4C, 0x80, 0x24, 0xFF, 0xFC, // ADTS header
+        0x21, 0x10, 0x04, 0x00, 0x1A, 0x33, 0x55, 0x77,
+    };
+
+    runCase(38900, 38901, CBridge::AudioCodec::Opus, QByteArray(), kOpusPacket,
+            sizeof(kOpusPacket), 960, "opening sink (Opus)");
+
+    // AAC: the muxer needs the AudioSpecificConfig (AAC-LC / 48 kHz / stereo) and the sink
+    // removes the ADTS header from every packet.
+    runCase(38902, 38903, CBridge::AudioCodec::Aac, QByteArray("\x11\x90", 2), kAdtsPacket,
+            sizeof(kAdtsPacket), 1024, "opening sink (AAC)");
+
+    // Guard: AAC without an AudioSpecificConfig must be rejected up front rather than
+    // silently producing an unplayable stream.
+    {
+        CBridge::RtpMulticastSinkConfig config;
+        config.groupAddress = u"127.0.0.1"_s;
+        config.port = quint16(38904);
+        config.ttl = 1;
+        CBridge::RtpMulticastSink sink(config);
+        CBridge::StreamFormat format;
+        format.videoCodec = CBridge::VideoCodec::H264;
+        format.width = 1920;
+        format.height = 1080;
+        format.hasAudio = true;
+        format.audioCodec = CBridge::AudioCodec::Aac;
+        QString error;
+        check(!sink.open(format, &error) && !sink.isOpen(),
+              "AAC without an AudioSpecificConfig is rejected");
+        sink.close();
+    }
 
     if (g_failures > 0) {
         logLine(("rtp-smoke-test: " + QString::number(g_failures) + u" failure(s)"_s).toUtf8().constData());

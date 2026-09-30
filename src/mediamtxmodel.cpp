@@ -69,6 +69,26 @@ QString percentEncode(const QString &value)
     return QString::fromUtf8(QUrl::toPercentEncoding(value));
 }
 
+/// QVariant::toInt()/toBool() have no default-value overload; a missing key must fall back
+/// explicitly instead of silently becoming 0/false.
+int jsonInt(const QJsonObject &json, const QString &key, int fallback)
+{
+    const QVariant value = json.value(key);
+    return value.isValid() ? value.toInt() : fallback;
+}
+
+bool jsonBool(const QJsonObject &json, const QString &key, bool fallback)
+{
+    const QVariant value = json.value(key);
+    return value.isValid() ? value.toBool() : fallback;
+}
+
+QString jsonString(const QJsonObject &json, const QString &key, const QString &fallback)
+{
+    const QString value = json.value(key).toString();
+    return value.isEmpty() ? fallback : value;
+}
+
 // MediaMTX addresses are given as "host:port" or ":port".
 int portFromAddress(const QString &address, int fallback)
 {
@@ -185,13 +205,14 @@ void MediaMtxServersModel::updateServersList()
         Server s;
         s.name = o.value(u"name"_s).toString();
         s.host = o.value(u"host"_s).toString();
-        s.apiPort = o.value(u"apiPort"_s).toInt(9997);
-        s.apiScheme = o.value(u"apiScheme"_s).toString(u"http"_s);
+        s.apiPort = jsonInt(o, u"apiPort"_s, 9997);
+        s.apiScheme = jsonString(o, u"apiScheme"_s, u"http"_s);
         s.username = o.value(u"username"_s).toString();
-        s.webRtcPort = o.value(u"webRtcPort"_s).toInt(8889);
-        s.webRtcScheme = o.value(u"webRtcScheme"_s).toString(u"http"_s);
-        s.autoDetectWebRtc = o.value(u"autoDetectWebRtc"_s).toBool(true);
-        s.enabled = o.value(u"enabled"_s).toBool(true);
+        s.webRtcPort = jsonInt(o, u"webRtcPort"_s, 8889);
+        s.webRtcScheme = jsonString(o, u"webRtcScheme"_s, u"http"_s);
+        s.autoDetectWebRtc = jsonBool(o, u"autoDetectWebRtc"_s, true);
+        s.srtPort = jsonInt(o, u"srtPort"_s, 8890); // MediaMTX's default SRT port
+        s.enabled = jsonBool(o, u"enabled"_s, true);
         if (previousPasswords.contains(s.name)) {
             s.password = previousPasswords.value(s.name);
         }
@@ -307,6 +328,7 @@ QVariantMap MediaMtxServersModel::serverAt(int index) const
     map.insert(u"webRtcPort"_s, s.webRtcPort);
     map.insert(u"webRtcScheme"_s, s.webRtcScheme);
     map.insert(u"autoDetectWebRtc"_s, s.autoDetectWebRtc);
+    map.insert(u"srtPort"_s, s.srtPort);
     map.insert(u"enabled"_s, s.enabled);
     map.insert(u"hasPassword"_s, !s.password.isEmpty());
     return map;
@@ -355,6 +377,11 @@ bool MediaMtxServersModel::hasUsablePassword(int index) const
     return !effectivePassword(index).isEmpty();
 }
 
+bool MediaMtxServersModel::hasUsableCredentials(int index) const
+{
+    return isValidIndex(index) && !username(index).isEmpty() && hasUsablePassword(index);
+}
+
 QString MediaMtxServersModel::apiBaseUrl(int index) const
 {
     if (!isValidIndex(index)) {
@@ -389,6 +416,18 @@ void MediaMtxServersModel::applyDetectedWebRtc(int index, int port, const QStrin
     Q_EMIT dataChanged(this->index(index, 0), this->index(index, 0));
 }
 
+void MediaMtxServersModel::applyDetectedSrt(int index, int port)
+{
+    if (!isValidIndex(index)) {
+        return;
+    }
+    Server &s = m_servers[index];
+    if (port > 0) {
+        s.srtPort = port;
+    }
+    Q_EMIT dataChanged(this->index(index, 0), this->index(index, 0));
+}
+
 void MediaMtxServersModel::saveServersToFile()
 {
     QJsonArray arr;
@@ -402,6 +441,7 @@ void MediaMtxServersModel::saveServersToFile()
         o.insert(u"webRtcPort"_s, s.webRtcPort);
         o.insert(u"webRtcScheme"_s, s.webRtcScheme);
         o.insert(u"autoDetectWebRtc"_s, s.autoDetectWebRtc);
+        o.insert(u"srtPort"_s, s.srtPort);
         o.insert(u"enabled"_s, s.enabled);
         arr.append(o);
     }
@@ -487,7 +527,7 @@ void MediaMtxWorker::doFetch(const QString &baseUrl, const QString &username, co
             for (const QJsonValue &value : o.value(u"items"_s).toArray()) {
                 outItems.append(value);
             }
-            pageCount = o.value(u"pageCount"_s).toInt(1);
+            pageCount = jsonInt(o, u"pageCount"_s, 1);
             ++page;
         }
         return true;
@@ -622,6 +662,18 @@ QVariant MediaMtxModel::data(const QModelIndex &index, int role) const
         return s.serverName;
     case WhepUrlRole:
         return s.whepUrl;
+    case EndpointRole: {
+        // The endpoint C-Bridge will actually use for this path: the SRT caller URL when the
+        // path is fed over SRT, otherwise the WHEP URL. Credentials are left out on purpose -
+        // they are only embedded in the stored entry when the user opts in (or must).
+        if (isSrtPathAt(index.row())) {
+            const QVariantMap endpoint = srtReadEndpointAt(index.row(), false);
+            return u"srt://%1:%2?streamid=%3"_s.arg(endpoint.value(u"host"_s).toString())
+                .arg(endpoint.value(u"port"_s).toInt())
+                .arg(endpoint.value(u"streamId"_s).toString());
+        }
+        return s.whepUrl;
+    }
     case OnlineRole:
         return s.online;
     case SourceTypeRole:
@@ -645,6 +697,7 @@ QHash<int, QByteArray> MediaMtxModel::roleNames() const
         { NameRole, "name" },
         { ServerNameRole, "serverName" },
         { WhepUrlRole, "whepUrl" },
+        { EndpointRole, "endpoint" },
         { OnlineRole, "online" },
         { SourceTypeRole, "sourceType" },
         { TracksRole, "tracks" },
@@ -796,7 +849,7 @@ void MediaMtxModel::onFetchFinished(int statusCode, const QString &pathsJson, co
             continue;
         }
         s.serverName = serverName;
-        s.online = o.value(u"online"_s).toBool(o.value(u"ready"_s).toBool());
+        s.online = jsonBool(o, u"online"_s, jsonBool(o, u"ready"_s, false));
         s.sourceType = o.value(u"source"_s).toObject().value(u"type"_s).toString();
         s.readers = int(o.value(u"readers"_s).toArray().size());
 
@@ -855,16 +908,23 @@ void MediaMtxModel::applyGlobalConfig(const QString &globalConfigJson)
         return;
     }
 
-    const QVariantMap server = m_servers->serverAt(m_currentServerIndex);
-    if (!server.value(u"autoDetectWebRtc"_s, true).toBool()) {
-        return;
-    }
-
     const QJsonDocument doc = QJsonDocument::fromJson(globalConfigJson.toUtf8());
     if (!doc.isObject()) {
         return;
     }
     const QJsonObject o = doc.object();
+
+    // The SRT port is needed to bridge SRT-sourced paths, so it is picked up regardless of the
+    // WebRTC auto-detect toggle. Servers that do not report srtAddress keep MediaMTX's default
+    // listen port (8890) rather than an arbitrary one nothing listens on.
+    m_servers->applyDetectedSrt(
+        m_currentServerIndex,
+        portFromAddress(o.value(u"srtAddress"_s).toString(), 8890));
+
+    const QVariantMap server = m_servers->serverAt(m_currentServerIndex);
+    if (!server.value(u"autoDetectWebRtc"_s, true).toBool()) {
+        return;
+    }
 
     // MediaMTX reports webrtcEncryption as a boolean in current versions and as the string
     // "strict" in older ones; accept both.
@@ -934,6 +994,47 @@ bool MediaMtxModel::requiresAuthAt(int index) const
         return false;
     }
     return m_streams.at(index).requiresAuth;
+}
+
+bool MediaMtxModel::isSrtPathAt(int index) const
+{
+    if (index < 0 || index >= m_streams.size()) {
+        return false;
+    }
+    // An active path reports the API enum of its source ("srtConn" for a stream pushed into
+    // MediaMTX's SRT port, "srtSource" for one pulled from an srt:// address); a configured-only
+    // path carries the raw configuration value instead.
+    const QString type = m_streams.at(index).sourceType;
+    return type == u"srtConn"_s || type == u"srtSource"_s || type.startsWith(u"srt://"_s);
+}
+
+QVariantMap MediaMtxModel::srtReadEndpointAt(int index, bool includeCredentials) const
+{
+    QVariantMap endpoint;
+    if (index < 0 || index >= m_streams.size() || !m_servers || m_currentServerIndex < 0) {
+        return endpoint;
+    }
+
+    const Stream &stream = m_streams.at(index);
+    const QVariantMap server = m_servers->serverAt(m_currentServerIndex);
+
+    // MediaMTX routes reads on its SRT port by streamid: "read:<path>", optionally followed by
+    // ":<user>:<pass>". (A user or password containing ':' would break the format; that is a
+    // limitation of MediaMTX's own streamid grammar, not something C-Bridge can work around.)
+    QString streamId = u"read:"_s + stream.name;
+    if (includeCredentials) {
+        const QString username = server.value(u"username"_s).toString();
+        if (!username.isEmpty()) {
+            streamId += u":"_s + username;
+            streamId += u":"_s + m_servers->effectivePassword(m_currentServerIndex);
+        }
+    }
+
+    endpoint.insert(u"host"_s, server.value(u"host"_s).toString());
+    const QVariant srtPort = server.value(u"srtPort"_s);
+    endpoint.insert(u"port"_s, srtPort.isValid() ? srtPort.toInt() : 8890); // MediaMTX default
+    endpoint.insert(u"streamId"_s, streamId);
+    return endpoint;
 }
 
 } // namespace CBridge

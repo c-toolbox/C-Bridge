@@ -24,9 +24,9 @@
 namespace CBridge {
 
 class StreamSink;
-class WebRtcSource;
+class StreamSource;
 
-/// Runs one stream end to end: WHEP source in, N sinks out.
+/// Runs one stream end to end: source in (WHEP or SRT), N sinks out.
 ///
 /// The network thread only copies units into a bounded queue. A single worker
 /// thread drains it and drives every sink, so a slow sink can never stall the
@@ -41,6 +41,10 @@ public:
 
     const StreamConfig &config() const { return m_config; }
     QString id() const { return m_config.id; }
+
+    /// The transport this pipeline pulls from (SRT or WHEP). Only valid between start() and
+    /// stop(); exposed for diagnostics and tests.
+    StreamSource *source() const { return m_source; }
 
     void setPassword(const QString &password);
 
@@ -67,7 +71,7 @@ private:
     StreamConfig m_config;
     QString m_password;
 
-    WebRtcSource *m_source = nullptr;
+    StreamSource *m_source = nullptr;
     std::vector<std::unique_ptr<StreamSink>> m_sinks;
 
     MediaQueue m_queue;
@@ -77,6 +81,10 @@ private:
     BitstreamInspector m_inspector;
     bool m_sinksOpen = false;
     bool m_sawKeyframe = false;
+
+    /// True while the negotiated audio is Opus, so the Opus payload sanitizer runs. AAC
+    /// packets are passed through untouched (the sanitizer's checks are RFC 6716 framing).
+    bool m_audioIsOpus = true;
 
     /// Set once when upstream Opus payloads are found to carry undeclared trailing bytes, so the
     /// diagnostic warning fires a single time per stream instead of on every packet.

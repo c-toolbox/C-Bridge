@@ -7,6 +7,7 @@
             "enabled": true,
             "host": "127.0.0.1",
             "name": "Local MediaMTX",
+            "srtPort": 0,
             "username": "",
             "webRtcPort": 8889,
             "webRtcScheme": "http"
@@ -18,6 +19,19 @@
             "enabled": true,
             "host": "127.0.0.1",
             "name": "Mock",
+            "srtPort": 0,
+            "username": "reader",
+            "webRtcPort": 8889,
+            "webRtcScheme": "http"
+        },
+        {
+            "apiPort": 9997,
+            "apiScheme": "http",
+            "autoDetectWebRtc": true,
+            "enabled": true,
+            "host": "127.0.0.1",
+            "name": "Mock",
+            "srtPort": 8890,
             "username": "reader",
             "webRtcPort": 8889,
             "webRtcScheme": "http"

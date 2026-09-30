@@ -23,7 +23,6 @@ namespace CBridge {
 namespace {
 
 constexpr int kRtpVideoClock = 90000; // also the MPEG-TS timebase
-constexpr int kRtpAudioClock = 48000; // Opus
 constexpr qint64 kRtpWrap = 1LL << 32;
 
 QString avError(int code)
@@ -39,6 +38,17 @@ AVCodecID toAvCodecId(VideoCodec codec)
     case VideoCodec::H264: return AV_CODEC_ID_H264;
     case VideoCodec::H265: return AV_CODEC_ID_HEVC;
     case VideoCodec::Unknown: break;
+    }
+    return AV_CODEC_ID_NONE;
+}
+
+AVCodecID toAvCodecId(AudioCodec codec)
+{
+    switch (codec) {
+    case AudioCodec::Opus: return AV_CODEC_ID_OPUS;
+    case AudioCodec::Aac: return AV_CODEC_ID_AAC;
+    case AudioCodec::AacLatm: return AV_CODEC_ID_AAC_LATM;
+    case AudioCodec::Unknown: break;
     }
     return AV_CODEC_ID_NONE;
 }
@@ -351,10 +361,19 @@ bool RtspSink::ensureContext(Client *client)
 
         AVCodecParameters *audioParams = audio->codecpar;
         audioParams->codec_type = AVMEDIA_TYPE_AUDIO;
-        audioParams->codec_id = AV_CODEC_ID_OPUS;
+        audioParams->codec_id = toAvCodecId(m_format.audioCodec);
         audioParams->sample_rate = m_format.audioSampleRate;
         av_channel_layout_default(&audioParams->ch_layout, m_format.audioChannels);
-        audio->time_base = AVRational { 1, kRtpAudioClock };
+        if (!m_format.audioExtradata.isEmpty()) {
+            audioParams->extradata = static_cast<uint8_t *>(av_mallocz(
+                size_t(m_format.audioExtradata.size()) + AV_INPUT_BUFFER_PADDING_SIZE));
+            if (audioParams->extradata) {
+                std::memcpy(audioParams->extradata, m_format.audioExtradata.constData(),
+                            size_t(m_format.audioExtradata.size()));
+                audioParams->extradata_size = int(m_format.audioExtradata.size());
+            }
+        }
+        audio->time_base = AVRational { 1, audioClock() };
     }
 
     format->flags |= AVFMT_FLAG_FLUSH_PACKETS;
@@ -509,9 +528,11 @@ bool RtspSink::writeAudio(const std::uint8_t *data, std::size_t size,
 
     const qint64 absolute = unwrap(rtpTimestamp, m_audioLastRaw, m_audioOffset);
 
-    // ptsBase lives on the 90 kHz video clock while audio arrives at 48 kHz, so
-    // rebase in the video domain and express the result in the audio timebase.
-    const qint64 videoDomain = av_rescale(absolute, kRtpVideoClock, kRtpAudioClock);
+    // ptsBase lives on the 90 kHz video clock while audio arrives on its own clock
+    // (48 kHz for Opus, the stream rate for AAC), so rebase in the video domain and
+    // express the result in the audio timebase.
+    const int audioClock = this->audioClock();
+    const qint64 videoDomain = av_rescale(absolute, kRtpVideoClock, audioClock);
 
     std::vector<Client *> targets;
     {
@@ -527,7 +548,7 @@ bool RtspSink::writeAudio(const std::uint8_t *data, std::size_t size,
 
     bool anyWritten = false;
     for (Client *client : targets) {
-        const qint64 pts = av_rescale(videoDomain - client->ptsBase, kRtpAudioClock, kRtpVideoClock);
+        const qint64 pts = av_rescale(videoDomain - client->ptsBase, audioClock, kRtpVideoClock);
         if (writeToClient(client, client->audioStream, data, size, pts, true)) {
             anyWritten = true;
         } else {

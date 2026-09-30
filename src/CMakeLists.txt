@@ -28,6 +28,8 @@ qt_add_executable(${TARGET_NAME}
   core/mediaqueue.h
   core/streampipeline.cpp
   core/streampipeline.h
+  core/streamsource.cpp
+  core/streamsource.h
 
   media/bitstreaminspector.cpp
   media/bitstreaminspector.h
@@ -71,6 +73,9 @@ qt_add_executable(${TARGET_NAME}
   webrtc/whepclient.h
   webrtc/webrtcsource.cpp
   webrtc/webrtcsource.h
+
+  srt/srtsource.cpp
+  srt/srtsource.h
 
   # Application icons, same as C-Slice: the qrc embeds the window icon into the
   # exe (auto-registered at startup by Qt 6), and icon.rc sets the Windows file
@@ -352,6 +357,8 @@ qt_add_executable(webrtc-audio-smoke-test
   tests/webrtc_audio_smoke_test.cpp
   core/bridgetypes.cpp
   core/bridgetypes.h
+  core/streamsource.cpp
+  core/streamsource.h
   media/audiodecoder.cpp
   media/opuspayloadsanitizer.cpp
   webrtc/linkheaderparser.cpp
@@ -488,6 +495,58 @@ if(WIN32 AND FFMPEG_RUNTIME_DIR)
         ${CBRIDGE_RTP_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:rtp-smoke-test>"
         COMMAND_EXPAND_LISTS
         VERBATIM
+    )
+  endif()
+endif()
+
+# --- SRT smoke test -------------------------------------------------------------
+# Regression check that an empty-host listener binds and waits for a peer (the old srt://:<port>
+# URL resolved to the IPv6 wildcard this FFmpeg/SRT build refuses with SRT_EINVOP), then a full
+# loopback round-trip: an in-process FFmpeg SRT caller pushes H.264 keyframes into the
+# production SrtSource listener and video units must come back through its callback.
+add_executable(srt-smoke-test
+  tests/srt_smoke_test.cpp
+  srt/srtsource.cpp
+  core/bridgetypes.cpp
+  core/streamsource.cpp
+  media/audiodecoder.cpp
+  media/opuspayloadsanitizer.cpp
+)
+target_include_directories(srt-smoke-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# Keep this a console app even if it is ever converted to qt_add_executable.
+set_target_properties(srt-smoke-test PROPERTIES WIN32_EXECUTABLE OFF)
+# Same as the main target: keep Craft's FFmpeg headers from shadowing the pinned tree.
+target_include_directories(srt-smoke-test BEFORE PRIVATE "${FFMPEG_INCLUDE_DIRS}")
+target_link_libraries(srt-smoke-test PRIVATE
+  Qt6::Core
+  FFmpeg::AVCODEC
+  FFmpeg::AVFORMAT
+  FFmpeg::AVUTIL
+  FFmpeg::SWRESAMPLE
+)
+
+if(MSVC)
+  target_compile_options(srt-smoke-test PRIVATE
+    /permissive-
+    /Zc:__cplusplus
+    /wd4244
+    /wd4267
+  )
+  target_compile_definitions(srt-smoke-test PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS
+  )
+endif()
+
+if(WIN32 AND FFMPEG_RUNTIME_DIR)
+  file(GLOB CBRIDGE_SRT_SMOKE_FFMPEG_DLLS "${FFMPEG_RUNTIME_DIR}/*.dll")
+  if(CBRIDGE_SRT_SMOKE_FFMPEG_DLLS)
+    add_custom_command(TARGET srt-smoke-test POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CBRIDGE_SRT_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:srt-smoke-test>"
+      COMMAND_EXPAND_LISTS
+      VERBATIM
     )
   endif()
 endif()

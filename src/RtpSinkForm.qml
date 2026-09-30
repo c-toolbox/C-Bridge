@@ -85,7 +85,7 @@ Kirigami.FormLayout {
         Layout.fillWidth: true
         opacity: 0.7
         wrapMode: Text.WordWrap
-        text: qsTr("Raw RTP over UDP multicast: H.264/H.265 video on the port above and Opus audio " +
+        text: qsTr("Raw RTP over UDP multicast: H.264/H.265 video on the port above and Opus or AAC audio " +
                    "on the next one, with RTCP sender reports on the same sockets. Payload types and " +
                    "SSRCs are assigned dynamically by FFmpeg, so receivers should probe or be given an SDP.")
     }

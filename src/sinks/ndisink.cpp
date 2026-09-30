@@ -79,7 +79,8 @@ bool NdiSink::open(const StreamFormat &format, QString *error)
 
     if (format.hasAudio && m_config.audioEnabled) {
         QString audioError;
-        if (!m_audioDecoder.open(format.audioSampleRate, format.audioChannels, &audioError)) {
+        if (!m_audioDecoder.open(format.audioCodec, format.audioSampleRate,
+                                 format.audioChannels, format.audioExtradata, &audioError)) {
             qWarning("NDI sink %s: audio disabled: %s", qUtf8Printable(describe()),
                      qUtf8Printable(audioError));
         } else {

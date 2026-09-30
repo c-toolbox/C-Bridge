@@ -54,14 +54,21 @@ private:
         qint64 lastRaw = -1;
         qint64 offset = 0;
         qint64 base = -1; // first absolute timestamp seen, rebased to zero
+
+        /// True for the ADTS AAC audio stream: the RTP muxer wants MPEG4-GENERIC, so each
+        /// packet is written with its 7/9-byte ADTS header stripped and the AudioSpecificConfig
+        /// supplied as extradata. Opus and video leave this false (pure passthrough).
+        bool stripAdtsHeader = false;
     };
 
     /// Opens one single-stream rtp muxer context. A VideoCodec of Unknown selects the
-    /// Opus audio stream; H264/H265 select the video stream (FFmpeg's AVCodecID is a
-    /// typedef'd enum and cannot be forward-declared, so it stays out of this header).
+    /// audio stream, whose codec and extradata come from `audioCodec`/`audioExtradata`;
+    /// H264/H265 select the video stream (FFmpeg's AVCodecID is a typedef'd enum and cannot
+    /// be forward-declared, so it stays out of this header).
     static bool openStream(RtpStreamContext &stream, const QString &url, VideoCodec codec,
                            int width, int height, const std::uint8_t *extradata, std::size_t extradataSize,
-                           int sampleRate, int channels, QString *error);
+                           AudioCodec audioCodec, int sampleRate, int channels,
+                           const QByteArray &audioExtradata, QString *error);
     static void closeStream(RtpStreamContext &stream);
 
     /// Unwraps a 32-bit RTP timestamp into an absolute one and rebases it to zero.

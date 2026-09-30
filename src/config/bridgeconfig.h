@@ -100,6 +100,34 @@ struct NdiSinkConfig {
     static NdiSinkConfig fromJson(const QJsonObject &json);
 };
 
+/// SRT receive endpoint. The stream is expected to carry an MPEG-TS container with
+/// H.264/H.265 video and Opus audio, which C-Bridge passes through untouched.
+struct SrtSourceConfig {
+    enum class Mode {
+        Listener, // wait for the encoder to connect (srt://:<port>)
+        Caller,   // dial out to an existing listener (srt://<host>:<port>)
+    };
+
+    Mode mode = Mode::Listener;
+    QString host;      // caller mode only
+    quint16 port = 9000;
+    QString passphrase; // optional AES-128 encryption, must match the encoder's
+    int latencyMs = 120; // receive latency for burst absorption
+
+    /// SRT streamid sent by a caller to the listener it dials out to. MediaMTX expects
+    /// "read:<path>" (optionally followed by ":<user>:<pass>") on its SRT port; other
+    /// servers may use it for access control or routing. Empty leaves it at the default.
+    QString streamId;
+
+    QJsonObject toJson() const;
+    static SrtSourceConfig fromJson(const QJsonObject &json);
+
+    /// The srt:// endpoint this source listens on or dials out to. A listener with no
+    /// explicit host binds 0.0.0.0: an empty host would resolve to the IPv6 wildcard,
+    /// which SRT refuses to bind when SRTO_IPV6ONLY is not set.
+    QString url() const;
+};
+
 struct SinkConfig {
     SinkKind kind = SinkKind::TsMulticast;
     bool enabled = true;
@@ -119,8 +147,10 @@ struct StreamConfig {
     QString name;
     bool enabled = true;
 
+    SourceKind sourceKind = SourceKind::Whep; // default keeps every existing config loading unchanged
     QUrl whepUrl;
     QString username;
+    SrtSourceConfig srt;
 
     /// Order matters: the first entry is offered with the highest priority.
     QList<VideoCodec> preferredCodecs { VideoCodec::H264, VideoCodec::H265 };

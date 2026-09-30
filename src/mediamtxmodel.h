@@ -77,11 +77,17 @@ public:
     /// (manually entered) one or a stored credential from the Windows Credential Manager.
     Q_INVOKABLE bool hasUsablePassword(int index) const;
 
+    /// True when both a username and a usable password are available, so credentials can be
+    /// embedded into an endpoint (WHEP URL or SRT streamid).
+    Q_INVOKABLE bool hasUsableCredentials(int index) const;
+
     QString apiBaseUrl(int index) const;
     QString username(int index) const;
     QString name(int index) const;
     /// Applies the WebRTC port/scheme detected from the server config, without touching the stored file.
     void applyDetectedWebRtc(int index, int port, const QString &scheme);
+    /// Applies the SRT port detected from the server's srtAddress, without touching the stored file.
+    void applyDetectedSrt(int index, int port);
 
 Q_SIGNALS:
     void serversListChanged();
@@ -97,6 +103,10 @@ private:
         int webRtcPort = 8889;
         QString webRtcScheme = QStringLiteral("http");
         bool autoDetectWebRtc = true;
+        /// The server's SRT port (srtAddress), used when bridging an SRT-sourced path.
+        /// Falls back to MediaMTX's documented default ([::]:8890) until detection reports
+        /// the real one: dialing a made-up port can only fail with a generic I/O error.
+        int srtPort = 8890;
         bool enabled = true;
     };
 
@@ -148,6 +158,7 @@ public:
         NameRole = Qt::UserRole + 1,
         ServerNameRole,
         WhepUrlRole,
+        EndpointRole,
         OnlineRole,
         SourceTypeRole,
         TracksRole,
@@ -175,6 +186,17 @@ public:
     /// True when the path's configuration requires read authentication
     /// ("readAuthentication: internal"), so fetching it needs credentials.
     Q_INVOKABLE bool requiresAuthAt(int index) const;
+
+    /// True when the path is fed over SRT: an active path whose source type is "srtConn"
+    /// (pushed into MediaMTX's SRT port) or "srtSource" (pulled from one), and a
+    /// configured-only path whose source address starts with srt://. Such paths are best
+    /// bridged by dialing the server's own SRT port instead of going through WHEP.
+    Q_INVOKABLE bool isSrtPathAt(int index) const;
+
+    /// The caller endpoint for reading this path over SRT: the server host, its SRT port and
+    /// the streamid MediaMTX expects ("read:<path>", plus ":<user>:<pass>" when credentials
+    /// are included). Empty map when there is no current server or the index is invalid.
+    Q_INVOKABLE QVariantMap srtReadEndpointAt(int index, bool includeCredentials = false) const;
 
     Q_PROPERTY(int numberOfStreams READ getNumberOfStreams NOTIFY streamsListChanged)
     int getNumberOfStreams() const;

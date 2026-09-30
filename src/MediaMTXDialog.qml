@@ -493,7 +493,7 @@ Controls.Dialog {
 
                     Controls.Label {
                         Layout.fillWidth: true
-                        text: model.whepUrl
+                        text: model.endpoint
                         color: Kirigami.Theme.disabledTextColor
                         elide: Text.ElideMiddle
                     }
@@ -504,9 +504,14 @@ Controls.Dialog {
                     streamTitleField.text = model.serverName !== "" ? model.serverName + "/" + model.name : model.name
                     // A path with read authentication cannot be fetched without credentials, so the
                     // checkbox is forced on for those instead of offering a choice that would create
-                    // an entry that never connects.
+                    // an entry that never connects. SRT paths get it checked as well whenever the
+                    // server has usable credentials: the streamid is their only credential channel,
+                    // and "Add to Configuration" embeds them regardless of this box.
                     root.selectedStreamRequiresAuth = model.requiresAuth
-                    includeCredentialsCheckBox.checked = model.requiresAuth
+                    const srtAutoEmbed = controller.mediaMtxStreams.isSrtPathAt(index) &&
+                        controller.mediaMtxStreams.currentServerIndex >= 0 &&
+                        controller.mediaMtxServers.hasUsableCredentials(controller.mediaMtxStreams.currentServerIndex)
+                    includeCredentialsCheckBox.checked = model.requiresAuth || srtAutoEmbed
                     if (model.requiresAuth && controller.mediaMtxStreams.currentServerIndex >= 0 &&
                         !controller.mediaMtxServers.hasUsablePassword(controller.mediaMtxStreams.currentServerIndex)) {
                         statusLabel.text = qsTr("This path requires read authentication, but no password is available for its server.")
@@ -543,7 +548,7 @@ Controls.Dialog {
                 // Locked on for paths that require read authentication; without the credentials
                 // they cannot be fetched at all.
                 enabled: root.selectedStreamIndex >= 0 && !root.selectedStreamRequiresAuth
-                Controls.ToolTip.text: qsTr("Embeds user:password in the WHEP URL. C-Bridge sends them as an HTTP Basic header, but they are written to the configuration file in clear text. Enabled automatically for paths that require read authentication.")
+                Controls.ToolTip.text: qsTr("Embeds user:password in the URL (WHEP) or stream ID (SRT). They are written to the configuration file in clear text. Enabled automatically for paths that require read authentication; SRT paths always embed credentials when the server has a username and password, since the streamid is their only credential channel.")
                 Controls.ToolTip.visible: hovered
             }
             Controls.Button {

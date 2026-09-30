@@ -9,6 +9,7 @@
 
 #include "core/bridgetypes.h"
 
+#include <QByteArray>
 #include <QString>
 
 #include <cstddef>
@@ -27,8 +28,14 @@ struct StreamFormat {
     QByteArray videoExtradata;
 
     bool hasAudio = false;
+    AudioCodec audioCodec = AudioCodec::Opus;
     int audioSampleRate = 48000;
     int audioChannels = 2;
+
+    /// Audio codec extradata: an AudioSpecificConfig for AAC (LOAS/LATM or ADTS, see
+    /// AudioDecoder), empty for Opus. The passthrough sinks need it so their muxers can
+    /// emit a valid container header; the NDI decoder uses it to open the right decoder.
+    QByteArray audioExtradata;
 };
 
 /// One output of a stream pipeline.

@@ -55,6 +55,10 @@ QVariant StreamListModel::data(const QModelIndex &index, int role) const
     case EnabledRole:
         return stream.enabled;
     case SourceUrlRole:
+        // SRT streams have no WHEP URL; show the endpoint they listen on or dial out to.
+        if (stream.sourceKind == SourceKind::Srt) {
+            return stream.srt.url();
+        }
         return stream.whepUrl.toString();
     case SinksRole: {
         QStringList descriptions;

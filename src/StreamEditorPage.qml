@@ -58,8 +58,17 @@ Kirigami.ScrollablePage {
                 onTextEdited: controller.draft.name = text
             }
 
+            Controls.ComboBox {
+                Kirigami.FormData.label: qsTr("Source type:")
+                model: [qsTr("WHEP (WebRTC)"), qsTr("SRT")]
+                currentIndex: controller.draft.sourceKind === "srt" ? 1 : 0
+                onActivated: controller.draft.sourceKind = currentIndex === 1 ? "srt" : "whep"
+            }
+
             Controls.TextField {
                 Kirigami.FormData.label: qsTr("WHEP URL:")
+                visible: controller.draft.sourceKind !== "srt"
+                enabled: visible
                 text: controller.draft.whepUrl
                 placeholderText: "http://localhost:8889/mystream/whep"
                 onTextEdited: controller.draft.whepUrl = text
@@ -67,6 +76,8 @@ Kirigami.ScrollablePage {
 
             Controls.TextField {
                 Kirigami.FormData.label: qsTr("Username:")
+                visible: controller.draft.sourceKind !== "srt"
+                enabled: visible
                 text: controller.draft.username
                 onTextEdited: controller.draft.username = text
             }
@@ -74,7 +85,9 @@ Kirigami.ScrollablePage {
             Controls.TextField {
                 id: passwordField
                 Kirigami.FormData.label: qsTr("Password:")
-                visible: controller.draft.username !== ""
+                visible: controller.draft.sourceKind !== "srt" &&
+                         controller.draft.username !== ""
+                enabled: visible
                 echoMode: Controls.TextField.Password
                 placeholderText: qsTr("Session only, or use the Windows Credential Manager")
                 onTextChanged: controller.setStreamPassword(controller.draft.streamId, text)
@@ -82,11 +95,70 @@ Kirigami.ScrollablePage {
 
             Controls.Label {
                 Layout.fillWidth: true
-                visible: controller.draft.username !== "" &&
+                visible: controller.draft.sourceKind !== "srt" &&
+                         controller.draft.username !== "" &&
                          controller.hasStoredCredentialFor(controller.draft.whepUrl, controller.draft.username)
                 color: Kirigami.Theme.positiveTextColor
                 wrapMode: Text.WordWrap
                 text: qsTr("A password for this user is stored in the Windows Credential Manager and will be used automatically.")
+            }
+
+            Controls.ComboBox {
+                Kirigami.FormData.label: qsTr("SRT mode:")
+                visible: controller.draft.sourceKind === "srt"
+                enabled: visible
+                model: [qsTr("Listener (wait for the encoder)"), qsTr("Caller (dial out)")]
+                currentIndex: controller.draft.srtIsCaller ? 1 : 0
+                onActivated: controller.draft.srtIsCaller = currentIndex === 1
+            }
+
+            Controls.TextField {
+                Kirigami.FormData.label: qsTr("Host:")
+                visible: controller.draft.sourceKind === "srt" && controller.draft.srtIsCaller
+                enabled: visible
+                text: controller.draft.srtHost
+                placeholderText: "192.168.1.50"
+                onTextEdited: controller.draft.srtHost = text
+            }
+
+            Controls.SpinBox {
+                Kirigami.FormData.label: qsTr("Port:")
+                visible: controller.draft.sourceKind === "srt"
+                enabled: visible
+                from: 1
+                to: 65535
+                value: controller.draft.srtPort
+                onValueModified: controller.draft.srtPort = value
+            }
+
+            Controls.TextField {
+                Kirigami.FormData.label: qsTr("Stream ID:")
+                visible: controller.draft.sourceKind === "srt" && controller.draft.srtIsCaller
+                enabled: visible
+                placeholderText: "read:myPath (MediaMTX)"
+                text: controller.draft.srtStreamId
+                onTextEdited: controller.draft.srtStreamId = text
+            }
+
+            Controls.TextField {
+                Kirigami.FormData.label: qsTr("Passphrase:")
+                visible: controller.draft.sourceKind === "srt"
+                enabled: visible
+                echoMode: Controls.TextField.Password
+                placeholderText: qsTr("Optional, must match the encoder")
+                text: controller.draft.srtPassphrase
+                onTextChanged: controller.draft.srtPassphrase = text
+            }
+
+            Controls.SpinBox {
+                Kirigami.FormData.label: qsTr("Receive latency (ms):")
+                visible: controller.draft.sourceKind === "srt"
+                enabled: visible
+                from: 0
+                to: 60000
+                stepSize: 10
+                value: controller.draft.srtLatencyMs
+                onValueModified: controller.draft.srtLatencyMs = value
             }
 
             Controls.CheckBox {
@@ -104,6 +176,8 @@ Kirigami.ScrollablePage {
 
             Controls.ComboBox {
                 Kirigami.FormData.label: qsTr("Preferred codec:")
+                visible: controller.draft.sourceKind !== "srt"
+                enabled: visible
                 model: ["h264", "h265"]
                 currentIndex: controller.draft.preferredCodecs[0] === "h265" ? 1 : 0
                 // The unselected codec stays in the list as the fallback offer.

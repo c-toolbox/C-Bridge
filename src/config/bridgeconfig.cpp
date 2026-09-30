@@ -27,6 +27,26 @@ int clampInt(int value, int lo, int hi)
     return std::min(hi, std::max(lo, value));
 }
 
+/// QVariant::toInt()/toBool() have no default-value overload; a missing key must fall back
+/// explicitly instead of silently becoming 0/false.
+int jsonInt(const QJsonObject &json, const QString &key, int fallback)
+{
+    const QVariant value = json.value(key);
+    return value.isValid() ? value.toInt() : fallback;
+}
+
+bool jsonBool(const QJsonObject &json, const QString &key, bool fallback)
+{
+    const QVariant value = json.value(key);
+    return value.isValid() ? value.toBool() : fallback;
+}
+
+QString jsonString(const QJsonObject &json, const QString &key, const QString &fallback)
+{
+    const QString value = json.value(key).toString();
+    return value.isEmpty() ? fallback : value;
+}
+
 bool isMulticastV4(const QString &address)
 {
     QHostAddress host;
@@ -65,13 +85,13 @@ QJsonObject TsMulticastSinkConfig::toJson() const
 TsMulticastSinkConfig TsMulticastSinkConfig::fromJson(const QJsonObject &json)
 {
     TsMulticastSinkConfig config;
-    config.groupAddress = json.value(u"groupAddress"_s).toString(config.groupAddress);
-    config.port = quint16(clampInt(json.value(u"port"_s).toInt(config.port), 1, 65535));
-    config.ttl = clampInt(json.value(u"ttl"_s).toInt(config.ttl), 1, 255);
+    config.groupAddress = jsonString(json, u"groupAddress"_s, config.groupAddress);
+    config.port = quint16(clampInt(jsonInt(json, u"port"_s, int(config.port)), 1, 65535));
+    config.ttl = clampInt(jsonInt(json, u"ttl"_s, config.ttl), 1, 255);
     config.localAddress = json.value(u"localAddress"_s).toString();
-    config.packetSize = clampInt(json.value(u"packetSize"_s).toInt(config.packetSize), 188, 65535);
-    config.patPeriodMs = clampInt(json.value(u"patPeriodMs"_s).toInt(config.patPeriodMs), 10, 5000);
-    config.pcrPeriodMs = clampInt(json.value(u"pcrPeriodMs"_s).toInt(config.pcrPeriodMs), 10, 500);
+    config.packetSize = clampInt(jsonInt(json, u"packetSize"_s, config.packetSize), 188, 65535);
+    config.patPeriodMs = clampInt(jsonInt(json, u"patPeriodMs"_s, config.patPeriodMs), 10, 5000);
+    config.pcrPeriodMs = clampInt(jsonInt(json, u"pcrPeriodMs"_s, config.pcrPeriodMs), 10, 500);
     return config;
 }
 
@@ -103,13 +123,13 @@ QJsonObject RtpMulticastSinkConfig::toJson() const
 RtpMulticastSinkConfig RtpMulticastSinkConfig::fromJson(const QJsonObject &json)
 {
     RtpMulticastSinkConfig config;
-    config.groupAddress = json.value(u"groupAddress"_s).toString(config.groupAddress);
+    config.groupAddress = jsonString(json, u"groupAddress"_s, config.groupAddress);
     // The audio stream uses port + 1, so the video port may not be the last one.
-    config.port = quint16(clampInt(json.value(u"port"_s).toInt(config.port), 1, 65534));
-    config.ttl = clampInt(json.value(u"ttl"_s).toInt(config.ttl), 1, 255);
+    config.port = quint16(clampInt(jsonInt(json, u"port"_s, int(config.port)), 1, 65534));
+    config.ttl = clampInt(jsonInt(json, u"ttl"_s, config.ttl), 1, 255);
     config.localAddress = json.value(u"localAddress"_s).toString();
     // The RTP header alone is 12 bytes; below ~60 the payload would be useless.
-    config.packetSize = clampInt(json.value(u"packetSize"_s).toInt(config.packetSize), 64, 65535);
+    config.packetSize = clampInt(jsonInt(json, u"packetSize"_s, config.packetSize), 64, 65535);
     return config;
 }
 
@@ -135,8 +155,8 @@ QJsonObject RtspSinkConfig::toJson() const
 RtspSinkConfig RtspSinkConfig::fromJson(const QJsonObject &json)
 {
     RtspSinkConfig config;
-    config.port = clampInt(json.value(u"port"_s).toInt(config.port), 1, 65535);
-    const QString path = sanitizeRtspPath(json.value(u"path"_s).toString(config.path));
+    config.port = clampInt(jsonInt(json, u"port"_s, config.port), 1, 65535);
+    const QString path = sanitizeRtspPath(jsonString(json, u"path"_s, config.path));
     config.path = path.isEmpty() ? QStringLiteral("stream") : path;
     config.localAddress = json.value(u"localAddress"_s).toString();
     return config;
@@ -169,9 +189,45 @@ NdiSinkConfig NdiSinkConfig::fromJson(const QJsonObject &json)
     config.targetWidth = std::max(0, json.value(u"targetWidth"_s).toInt());
     config.targetHeight = std::max(0, json.value(u"targetHeight"_s).toInt());
     config.fpsNum = std::max(0, json.value(u"fpsNum"_s).toInt());
-    config.fpsDen = std::max(1, json.value(u"fpsDen"_s).toInt(1));
-    config.audioEnabled = json.value(u"audioEnabled"_s).toBool(true);
+    config.fpsDen = std::max(1, jsonInt(json, u"fpsDen"_s, 1));
+    config.audioEnabled = jsonBool(json, u"audioEnabled"_s, true);
     return config;
+}
+
+QJsonObject SrtSourceConfig::toJson() const
+{
+    return QJsonObject {
+        { u"mode"_s, mode == Mode::Listener ? u"listener"_s : u"caller"_s },
+        { u"host"_s, host },
+        { u"port"_s, int(port) },
+        { u"passphrase"_s, passphrase },
+        { u"latencyMs"_s, latencyMs },
+        { u"streamId"_s, streamId },
+    };
+}
+
+SrtSourceConfig SrtSourceConfig::fromJson(const QJsonObject &json)
+{
+    SrtSourceConfig config;
+    const QString mode = jsonString(json, u"mode"_s, u"listener"_s);
+    config.mode = (mode == u"caller"_s) ? Mode::Caller : Mode::Listener;
+    config.host = json.value(u"host"_s).toString();
+    config.port = quint16(clampInt(jsonInt(json, u"port"_s, 9000), 1, 65535));
+    config.passphrase = json.value(u"passphrase"_s).toString();
+    config.latencyMs = clampInt(jsonInt(json, u"latencyMs"_s, 120), 0, 60000);
+    config.streamId = json.value(u"streamId"_s).toString();
+    return config;
+}
+
+QString SrtSourceConfig::url() const
+{
+    // A listener with no explicit host binds every IPv4 interface. The host part must not be
+    // empty: it would resolve to the IPv6 wildcard, which SRT refuses to bind (SRT_EINVOP)
+    // because FFmpeg does not set SRTO_IPV6ONLY on the socket.
+    if (mode == Mode::Listener && host.trimmed().isEmpty()) {
+        return u"srt://0.0.0.0:%1"_s.arg(port);
+    }
+    return u"srt://%1:%2"_s.arg(host).arg(port);
 }
 
 QJsonObject SinkConfig::toJson() const
@@ -202,7 +258,7 @@ SinkConfig SinkConfig::fromJson(const QJsonObject &json)
 {
     SinkConfig config;
     config.kind = sinkKindFromString(json.value(u"kind"_s).toString());
-    config.enabled = json.value(u"enabled"_s).toBool(true);
+    config.enabled = jsonBool(json, u"enabled"_s, true);
     config.ts = TsMulticastSinkConfig::fromJson(json.value(u"tsMulticast"_s).toObject());
     config.rtp = RtpMulticastSinkConfig::fromJson(json.value(u"rtpMulticast"_s).toObject());
     config.rtsp = RtspSinkConfig::fromJson(json.value(u"rtsp"_s).toObject());
@@ -244,8 +300,10 @@ QJsonObject StreamConfig::toJson() const
         { u"id"_s, id },
         { u"name"_s, name },
         { u"enabled"_s, enabled },
+        { u"sourceKind"_s, CBridge::toString(sourceKind) },
         { u"whepUrl"_s, whepUrl.toString() },
         { u"username"_s, username },
+        { u"srt"_s, srt.toJson() },
         { u"preferredCodecs"_s, codecs },
         { u"audioEnabled"_s, audioEnabled },
         { u"reconnectInitialMs"_s, reconnectInitialMs },
@@ -262,14 +320,20 @@ StreamConfig StreamConfig::fromJson(const QJsonObject &json)
         config.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }
     config.name = json.value(u"name"_s).toString();
-    config.enabled = json.value(u"enabled"_s).toBool(true);
+    config.enabled = jsonBool(json, u"enabled"_s, true);
+    // Missing sourceKind means an older document: it was always WHEP.
+    bool ok = false;
+    config.sourceKind = sourceKindFromString(json.value(u"sourceKind"_s).toString(), &ok);
+    if (!ok) {
+        config.sourceKind = SourceKind::Whep;
+    }
     config.whepUrl = QUrl(json.value(u"whepUrl"_s).toString());
     config.username = json.value(u"username"_s).toString();
-    config.audioEnabled = json.value(u"audioEnabled"_s).toBool(true);
-    config.reconnectInitialMs =
-        clampInt(json.value(u"reconnectInitialMs"_s).toInt(500), 100, 60000);
+    config.srt = SrtSourceConfig::fromJson(json.value(u"srt"_s).toObject());
+    config.audioEnabled = jsonBool(json, u"audioEnabled"_s, true);
+    config.reconnectInitialMs = clampInt(jsonInt(json, u"reconnectInitialMs"_s, 500), 100, 60000);
     config.reconnectMaxMs =
-        clampInt(json.value(u"reconnectMaxMs"_s).toInt(15000), config.reconnectInitialMs, 300000);
+        clampInt(jsonInt(json, u"reconnectMaxMs"_s, 15000), config.reconnectInitialMs, 300000);
 
     const QJsonArray codecs = json.value(u"preferredCodecs"_s).toArray();
     if (!codecs.isEmpty()) {
@@ -344,7 +408,7 @@ std::optional<BridgeConfig> BridgeConfig::fromJson(const QJsonObject &json, QStr
     }
 
     BridgeConfig config;
-    config.name = json.value(u"name"_s).toString(u"Untitled"_s);
+    config.name = jsonString(json, u"name"_s, u"Untitled"_s);
 
     const QJsonArray streamArray = json.value(u"streams"_s).toArray();
     for (const QJsonValue &value : streamArray) {
@@ -417,8 +481,23 @@ QStringList BridgeConfig::validateStream(const StreamConfig &candidate,
     QStringList problems;
     const QString label = candidate.name.trimmed().isEmpty() ? candidate.id : candidate.name;
 
-    if (!candidate.whepUrl.isValid() || candidate.whepUrl.scheme().isEmpty()) {
-        problems.append(u"Stream \"%1\" has no valid WHEP URL."_s.arg(label));
+    if (candidate.sourceKind == SourceKind::Whep) {
+        if (!candidate.whepUrl.isValid() || candidate.whepUrl.scheme().isEmpty()) {
+            problems.append(u"Stream \"%1\" has no valid WHEP URL."_s.arg(label));
+        }
+    } else {
+        const SrtSourceConfig &srt = candidate.srt;
+        if (srt.port == 0) {
+            problems.append(u"Stream \"%1\": the SRT port must not be zero."_s.arg(label));
+        }
+        if (srt.mode == SrtSourceConfig::Mode::Caller && srt.host.trimmed().isEmpty()) {
+            problems.append(u"Stream \"%1\" has an SRT caller source with no host."_s.arg(label));
+        }
+        // The SRT protocol caps the streamid at 512 characters; longer values are rejected
+        // by the library before a connection is even attempted.
+        if (srt.streamId.size() > 512) {
+            problems.append(u"Stream \"%1\": the SRT stream ID must be at most 512 characters."_s.arg(label));
+        }
     }
 
     const auto enabledSinks = std::count_if(candidate.sinks.cbegin(), candidate.sinks.cend(),
@@ -430,10 +509,14 @@ QStringList BridgeConfig::validateStream(const StreamConfig &candidate,
     // Everything claimed by the other streams, so the candidate never clashes with itself.
     QSet<QString> endpoints;
     QSet<QString> rtspEndpoints;
+    QSet<quint16> srtListenerPorts;
     QSet<QString> ndiNames;
     for (const StreamConfig &other : streams) {
         if (other.id == excludeId) {
             continue;
+        }
+        if (other.sourceKind == SourceKind::Srt && other.srt.mode == SrtSourceConfig::Mode::Listener) {
+            srtListenerPorts.insert(other.srt.port);
         }
         for (const SinkConfig &sink : other.sinks) {
             if (!sink.enabled) {
@@ -512,6 +595,13 @@ QStringList BridgeConfig::validateStream(const StreamConfig &candidate,
             break;
         }
         }
+    }
+
+    if (candidate.sourceKind == SourceKind::Srt &&
+        candidate.srt.mode == SrtSourceConfig::Mode::Listener &&
+        srtListenerPorts.contains(candidate.srt.port)) {
+        problems.append(u"SRT listener port %1 is used by more than one stream."_s
+                            .arg(int(candidate.srt.port)));
     }
 
     return problems;

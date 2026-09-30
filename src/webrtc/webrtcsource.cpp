@@ -52,7 +52,7 @@ VideoCodec videoCodecFromAnswer(const QString &sdp)
 } // namespace
 
 WebRtcSource::WebRtcSource(QObject *parent)
-    : QObject(parent)
+    : StreamSource(parent)
 {
 }
 
@@ -71,37 +71,14 @@ void WebRtcSource::setPassword(const QString &password)
     m_password = password;
 }
 
-void WebRtcSource::setVideoCallback(MediaFrameCallback callback)
-{
-    m_onVideo = std::move(callback);
-}
-
-void WebRtcSource::setAudioCallback(MediaFrameCallback callback)
-{
-    m_onAudio = std::move(callback);
-}
-
 void WebRtcSource::setRawAudioPacketCallback(RawAudioPacketCallback callback)
 {
     m_onRawAudioPacket = std::move(callback);
 }
 
-StreamState WebRtcSource::state() const
-{
-    return m_state.load(std::memory_order_relaxed);
-}
-
 VideoCodec WebRtcSource::negotiatedVideoCodec() const
 {
     return m_videoCodec.load(std::memory_order_relaxed);
-}
-
-void WebRtcSource::setState(StreamState state)
-{
-    const StreamState previous = m_state.exchange(state, std::memory_order_relaxed);
-    if (previous != state) {
-        Q_EMIT stateChanged(state);
-    }
 }
 
 void WebRtcSource::start()

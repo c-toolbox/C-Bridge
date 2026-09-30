@@ -12,6 +12,7 @@
 #include "sinks/rtpmulticastsink.h"
 #include "sinks/rtspsink.h"
 #include "sinks/tsmulticastsink.h"
+#include "srt/srtsource.h"
 #include "webrtc/webrtcsource.h"
 
 #ifdef CBRIDGE_NDI_SUPPORT
@@ -137,9 +138,14 @@ void StreamPipeline::start()
 
     m_worker = std::thread([this] { workerLoop(); });
 
-    m_source = new WebRtcSource(this);
+    if (m_config.sourceKind == SourceKind::Srt) {
+        m_source = new SrtSource(this);
+    } else {
+        auto *whep = new WebRtcSource(this);
+        whep->setPassword(m_password);
+        m_source = whep;
+    }
     m_source->setConfig(m_config);
-    m_source->setPassword(m_password);
 
     m_source->setVideoCallback([this](const std::uint8_t *data, std::size_t size, quint32 ts) {
         MediaUnit unit;
@@ -159,13 +165,13 @@ void StreamPipeline::start()
         });
     }
 
-    connect(m_source, &WebRtcSource::videoCodecNegotiated, this, [this](VideoCodec codec) {
+    connect(m_source, &StreamSource::videoCodecNegotiated, this, [this](VideoCodec codec) {
         m_inspector.init(codec);
         std::lock_guard lock(m_statsMutex);
         m_stats.videoCodec = codec;
     });
 
-    connect(m_source, &WebRtcSource::stateChanged, this, [this](StreamState state) {
+    connect(m_source, &StreamSource::stateChanged, this, [this](StreamState state) {
         setState(state);
         if (state == StreamState::Running) {
             m_reconnectDelayMs = m_config.reconnectInitialMs;
@@ -174,7 +180,7 @@ void StreamPipeline::start()
         }
     });
 
-    connect(m_source, &WebRtcSource::errorOccurred, this, [this](const QString &message) {
+    connect(m_source, &StreamSource::errorOccurred, this, [this](const QString &message) {
         {
             std::lock_guard lock(m_statsMutex);
             m_stats.lastError = message;
@@ -244,8 +250,20 @@ bool StreamPipeline::openSinks()
     StreamFormat format;
     format.videoCodec = m_source ? m_source->negotiatedVideoCodec() : VideoCodec::Unknown;
     format.hasAudio = m_config.audioEnabled;
+    format.audioCodec = m_source ? m_source->negotiatedAudioCodec() : AudioCodec::Opus;
+    format.audioExtradata = m_source ? m_source->negotiatedAudioExtradata() : QByteArray();
+    format.audioSampleRate = m_source ? m_source->negotiatedAudioSampleRate() : 48000;
+    format.audioChannels = m_source ? m_source->negotiatedAudioChannels() : 2;
+    // A source that reports no audio stream (Unknown) has nothing to mux, even with audio
+    // enabled in the config — dropping the audio stream here keeps the muxers from being
+    // handed an AV_CODEC_ID_NONE stream.
+    if (format.audioCodec == AudioCodec::Unknown) {
+        format.hasAudio = false;
+    }
     format.videoExtradata = QByteArray(reinterpret_cast<const char *>(m_parameterSets.data()),
                                        qsizetype(m_parameterSets.size()));
+
+    m_audioIsOpus = format.audioCodec != AudioCodec::Aac && format.audioCodec != AudioCodec::AacLatm;
 
     {
         std::lock_guard lock(m_statsMutex);
@@ -352,12 +370,16 @@ void StreamPipeline::handleAudioUnit(const MediaUnit &unit)
         return;
     }
 
-    // Some upstream encoders append undeclared trailing bytes to their Opus payloads, which makes
-    // CBR packets structurally invalid for every conforming decoder (the NDI path hides this in
-    // AudioDecoder's size-1 retry). Recover the largest valid prefix once here so the passthrough
-    // sinks (TS multicast, RTP multicast, RTSP) deliver playable audio.
-    const std::size_t payloadSize = OpusPayloadSanitizer::validPrefixLength(unit.payload.data(), unit.payload.size());
-    if (payloadSize != unit.payload.size() && !m_warnedOpusTrailingBytes.exchange(true)) {
+    // Some upstream Opus encoders append undeclared trailing bytes to their payloads, which
+    // makes CBR packets structurally invalid for every conforming decoder (the NDI path hides
+    // this in AudioDecoder's size-1 retry). Recover the largest valid prefix once here so the
+    // passthrough sinks (TS multicast, RTP multicast, RTSP) deliver playable audio. The check
+    // is Opus-specific (RFC 6716 framing), so AAC packets pass through untouched.
+    const bool opus = m_audioIsOpus;
+    const std::size_t payloadSize =
+        opus ? OpusPayloadSanitizer::validPrefixLength(unit.payload.data(), unit.payload.size())
+             : unit.payload.size();
+    if (opus && payloadSize != unit.payload.size() && !m_warnedOpusTrailingBytes.exchange(true)) {
         qWarning("stream %s: upstream Opus payloads carry undeclared trailing bytes "
                  "(first packet %zu -> %zu); stripping them before muxing",
                  qUtf8Printable(m_config.id), unit.payload.size(), payloadSize);

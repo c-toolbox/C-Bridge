@@ -101,6 +101,12 @@ private:
     /// Converts a wrapping 32-bit RTP timestamp into a monotonic 64-bit PTS.
     static qint64 unwrap(std::uint32_t rtpTimestamp, qint64 &lastRaw, qint64 &offset);
 
+    /// RTP clock of the audio stream: Opus is fixed at 48 kHz, AAC runs at its own rate.
+    int audioClock() const
+    {
+        return m_format.audioSampleRate > 0 ? m_format.audioSampleRate : 48000;
+    }
+
     QString sdp() const;
 
     RtspSinkConfig m_config;
