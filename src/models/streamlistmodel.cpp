@@ -108,6 +108,16 @@ QVariant StreamListModel::data(const QModelIndex &index, int role) const
         return stats.reconnectCount;
     case LastErrorRole:
         return stats.lastError;
+    case PositionRole:
+        return stats.positionSeconds;
+    case DurationRole:
+        return stats.durationSeconds;
+    case LiveRole:
+        return stats.live;
+    case ControllableRole:
+        return m_engine && m_engine->isPlaybackControllable(stream.id);
+    case LastEventRole:
+        return stats.lastEvent;
     default:
         return {};
     }
@@ -130,6 +140,11 @@ QHash<int, QByteArray> StreamListModel::roleNames() const
         { QueueDepthRole, "queueDepth" },
         { ReconnectsRole, "reconnects" },
         { LastErrorRole, "lastError" },
+        { PositionRole, "positionSeconds" },
+        { DurationRole, "durationSeconds" },
+        { LiveRole, "live" },
+        { ControllableRole, "playbackControllable" },
+        { LastEventRole, "lastEvent" },
     };
 }
 
@@ -142,7 +157,8 @@ void StreamListModel::refreshStats()
     static const QList<int> liveRoles {
         StateRole, ResolutionRole, CodecRole, MbpsRole,
         DroppedRole, QueueDepthRole, ReconnectsRole, LastErrorRole,
-        SinkStatsRole,
+        SinkStatsRole, PositionRole, DurationRole, LiveRole, ControllableRole,
+        LastEventRole,
     };
 
     Q_EMIT dataChanged(index(0), index(int(m_streams.size()) - 1), liveRoles);

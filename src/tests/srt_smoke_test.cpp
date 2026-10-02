@@ -448,7 +448,7 @@ int main(int argc, char **argv)
 
         std::atomic<int> videoUnits { 0 };
         source.setVideoCallback(
-            [&videoUnits](const std::uint8_t *, std::size_t, quint32) { ++videoUnits; });
+            [&videoUnits](const std::uint8_t *, std::size_t, quint32, quint32) { ++videoUnits; });
 
         source.setConfig(config);
         source.start();
@@ -515,7 +515,8 @@ int main(int argc, char **argv)
                              });
 
             std::atomic<int> videoUnits { 0 };
-            source.setVideoCallback([&videoUnits](const std::uint8_t *, std::size_t, quint32) {
+            source.setVideoCallback([&videoUnits](const std::uint8_t *, std::size_t, quint32,
+                                                  quint32) {
                 ++videoUnits;
             });
 

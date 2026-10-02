@@ -409,7 +409,7 @@ int main(int argc, char **argv)
         parseRtpHeader(raw, &wireStats);
         rawPackets.push_back(std::move(raw));
     });
-    source.setVideoCallback([&](const std::uint8_t *, std::size_t, quint32) {
+    source.setVideoCallback([&](const std::uint8_t *, std::size_t, quint32, quint32) {
         if (capturing) {
             ++videoFrames;
         }

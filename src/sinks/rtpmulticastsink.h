@@ -38,7 +38,8 @@ public:
     void close() override;
     bool isOpen() const override { return m_open; }
 
-    bool writeVideo(const std::uint8_t *data, std::size_t size, std::uint32_t rtpTimestamp, bool isKeyframe) override;
+    bool writeVideo(const std::uint8_t *data, std::size_t size, std::uint32_t dtsTimestamp,
+                    std::uint32_t ptsTimestamp, bool isKeyframe) override;
     bool writeAudio(const std::uint8_t *data, std::size_t size, std::uint32_t rtpTimestamp) override;
 
     quint64 bytesWritten() const override { return m_bytesWritten.load(std::memory_order_relaxed); }
@@ -50,10 +51,16 @@ private:
         AVFormatContext *format = nullptr;
         AVPacket *packet = nullptr;
 
-        // 32-bit RTP timestamp unwrapping state (see TsMulticastSink for the rationale).
+        // 32-bit RTP timestamp unwrapping state (see TsMulticastSink for the rationale). The
+        // video stream tracks DTS and PTS separately because they wrap independently on the
+        // same 90 kHz grid; audio has one clock only.
         qint64 lastRaw = -1;
         qint64 offset = 0;
         qint64 base = -1; // first absolute timestamp seen, rebased to zero
+
+        /// Second unwrap pair for the video's presentation clock (unused by audio).
+        qint64 lastRawPts = -1;
+        qint64 offsetPts = 0;
 
         /// True for the ADTS AAC audio stream: the RTP muxer wants MPEG4-GENERIC, so each
         /// packet is written with its 7/9-byte ADTS header stripped and the AudioSpecificConfig
@@ -71,11 +78,12 @@ private:
                            const QByteArray &audioExtradata, QString *error);
     static void closeStream(RtpStreamContext &stream);
 
-    /// Unwraps a 32-bit RTP timestamp into an absolute one and rebases it to zero.
-    static qint64 unwrapTimestamp(std::uint32_t raw, RtpStreamContext &stream);
+    /// Unwraps a wrapping 32-bit clock value into an absolute one. The caller owns the
+    /// continuity state so video can track DTS and PTS with separate pairs.
+    static qint64 unwrapTimestamp(std::uint32_t raw, qint64 &lastRaw, qint64 &offset);
 
     bool writePacket(RtpStreamContext &stream, const std::uint8_t *data, std::size_t size,
-                     qint64 pts, bool isKeyframe);
+                     qint64 pts, qint64 dts, bool isKeyframe);
 
     /// Builds the udp:// destination with the socket options FFmpeg's UDP protocol
     /// understands (pkt_size, ttl, localaddr, overrun_nonfatal, fifo_size).

@@ -42,7 +42,8 @@ public:
     bool isOpen() const override { return m_open; }
 
     bool writeVideo(const std::uint8_t *data, std::size_t size,
-                    std::uint32_t rtpTimestamp, bool isKeyframe) override;
+                    std::uint32_t dtsTimestamp, std::uint32_t ptsTimestamp,
+                    bool isKeyframe) override;
     bool writeAudio(const std::uint8_t *data, std::size_t size,
                     std::uint32_t rtpTimestamp) override;
 

@@ -314,17 +314,38 @@ bool SrtSource::run()
         }
 
         if (packet->stream_index == videoIndex && packet->size > 0) {
-            const int64_t dts = packet->dts != AV_NOPTS_VALUE ? packet->dts : packet->pts;
-            quint32 ts;
-            if (dts >= 0) {
-                ts = quint32(av_rescale_q(dts, format->streams[videoIndex]->time_base, videoClock));
-            } else {
-                // No presentation info at all: keep the RTP clock advancing at 30 fps.
-                ts = haveLastVideoTs ? lastVideoTs + 3000 : 0;
+            // Two clocks on the 90 kHz grid: DTS in decode order (muxers interleave and keep
+            // it monotonic) and PTS in presentation order (players display it). B-frame feeds
+            // carry both; a missing one falls back to the other, and neither falling back to
+            // a steady 30 fps advance.
+            std::int64_t dts64 = -1;
+            std::int64_t pts64 = -1;
+            if (packet->dts != AV_NOPTS_VALUE && packet->dts >= 0) {
+                dts64 = av_rescale_q(packet->dts, format->streams[videoIndex]->time_base, videoClock);
             }
-            lastVideoTs = ts;
+            if (packet->pts != AV_NOPTS_VALUE && packet->pts >= 0) {
+                pts64 = av_rescale_q(packet->pts, format->streams[videoIndex]->time_base, videoClock);
+            }
+
+            quint32 dtsTs;
+            quint32 ptsTs;
+            if (dts64 < 0 && pts64 < 0) {
+                // No presentation info at all: keep both clocks advancing at 30 fps.
+                dtsTs = haveLastVideoTs ? lastVideoTs + 3000 : 0;
+                ptsTs = dtsTs;
+            } else {
+                if (dts64 < 0) {
+                    dts64 = pts64; // DTS missing: decode order equals display order here
+                }
+                if (pts64 < 0) {
+                    pts64 = dts64; // PTS missing: fall back to the decode clock
+                }
+                dtsTs = quint32(dts64);
+                ptsTs = quint32(pts64);
+            }
+            lastVideoTs = dtsTs;
             haveLastVideoTs = true;
-            m_onVideo(packet->data, std::size_t(packet->size), ts);
+            m_onVideo(packet->data, std::size_t(packet->size), dtsTs, ptsTs);
         } else if (audioIndex >= 0 && packet->stream_index == audioIndex && packet->size > 0) {
             // The pipeline only registers an audio callback when the stream has audio enabled.
             if (m_onAudio) {

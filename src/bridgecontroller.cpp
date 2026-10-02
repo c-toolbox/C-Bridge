@@ -12,6 +12,7 @@
 #include "mediamtxcredentials.h"
 #include "models/streamlistmodel.h"
 #include "ndi/ndiruntime.h"
+#include "preview/streampreview.h"
 
 #include <KConfigGroup>
 
@@ -58,9 +59,19 @@ BridgeController::BridgeController(QObject *parent)
     });
 
     connect(m_engine, &BridgeEngine::streamStateChanged, this,
-            [this](const QString &, StreamState) {
+            [this](const QString &streamId, StreamState) {
                 m_model->refreshStats();
                 Q_EMIT runningChanged();
+            });
+
+    // A pipeline's preview object dies with the pipeline, so any window bound to it must
+    // close the moment the stream stops. stopStream() always emits Idle, even on the paths
+    // where stop() itself returns early, so this is the single reliable teardown signal.
+    connect(m_engine, &BridgeEngine::streamStateChanged, this,
+            [this](const QString &streamId, StreamState state) {
+                if (state == StreamState::Idle) {
+                    Q_EMIT previewInvalidated(streamId);
+                }
             });
 
     connect(m_engine, &BridgeEngine::streamError, this,
@@ -292,6 +303,57 @@ void BridgeController::stopStream(const QString &streamId)
 {
     m_engine->stopStream(streamId);
     Q_EMIT runningChanged();
+}
+
+// --- Built-in viewer & playback control ----------------------------------------------
+// Thin forwarders onto the engine's running pipelines. Everything is guarded on the
+// pipeline existing: a stream that is not running has no preview and no transport.
+
+QObject *BridgeController::previewFor(const QString &streamId) const
+{
+    return m_engine->previewFor(streamId);
+}
+
+bool BridgeController::isPlaybackControllable(const QString &streamId) const
+{
+    return m_engine->isPlaybackControllable(streamId);
+}
+
+bool BridgeController::isLiveStream(const QString &streamId) const
+{
+    return m_engine->isLive(streamId);
+}
+
+void BridgeController::pauseStream(const QString &streamId)
+{
+    m_engine->requestPause(streamId);
+    Q_EMIT runningChanged(); // the card's state label moves to Paused
+}
+
+void BridgeController::resumeStream(const QString &streamId)
+{
+    m_engine->requestResume(streamId);
+    Q_EMIT runningChanged();
+}
+
+void BridgeController::seekStream(const QString &streamId, double positionSeconds)
+{
+    m_engine->requestSeek(streamId, qint64(positionSeconds * 1000.0));
+}
+
+double BridgeController::streamPositionSeconds(const QString &streamId) const
+{
+    return m_engine->statsFor(streamId).positionSeconds;
+}
+
+double BridgeController::streamDurationSeconds(const QString &streamId) const
+{
+    return m_engine->statsFor(streamId).durationSeconds;
+}
+
+QString BridgeController::streamState(const QString &streamId) const
+{
+    return CBridge::toString(m_engine->statsFor(streamId).state);
 }
 
 void BridgeController::addStream(const QString &name, const QString &whepUrl)

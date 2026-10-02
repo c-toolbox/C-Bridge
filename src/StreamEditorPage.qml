@@ -60,14 +60,18 @@ Kirigami.ScrollablePage {
 
             Controls.ComboBox {
                 Kirigami.FormData.label: qsTr("Source type:")
-                model: [qsTr("WHEP (WebRTC)"), qsTr("SRT")]
-                currentIndex: controller.draft.sourceKind === "srt" ? 1 : 0
-                onActivated: controller.draft.sourceKind = currentIndex === 1 ? "srt" : "whep"
+                model: [qsTr("WHEP (WebRTC)"), qsTr("SRT"), qsTr("YouTube")]
+                currentIndex: controller.draft.sourceKind === "srt" ? 1 :
+                              controller.draft.sourceKind === "youtube" ? 2 : 0
+                onActivated: {
+                    const kinds = ["whep", "srt", "youtube"]
+                    controller.draft.sourceKind = kinds[currentIndex]
+                }
             }
 
             Controls.TextField {
                 Kirigami.FormData.label: qsTr("WHEP URL:")
-                visible: controller.draft.sourceKind !== "srt"
+                visible: controller.draft.sourceKind === "whep"
                 enabled: visible
                 text: controller.draft.whepUrl
                 placeholderText: "http://localhost:8889/mystream/whep"
@@ -76,7 +80,7 @@ Kirigami.ScrollablePage {
 
             Controls.TextField {
                 Kirigami.FormData.label: qsTr("Username:")
-                visible: controller.draft.sourceKind !== "srt"
+                visible: controller.draft.sourceKind === "whep"
                 enabled: visible
                 text: controller.draft.username
                 onTextEdited: controller.draft.username = text
@@ -85,7 +89,7 @@ Kirigami.ScrollablePage {
             Controls.TextField {
                 id: passwordField
                 Kirigami.FormData.label: qsTr("Password:")
-                visible: controller.draft.sourceKind !== "srt" &&
+                visible: controller.draft.sourceKind === "whep" &&
                          controller.draft.username !== ""
                 enabled: visible
                 echoMode: Controls.TextField.Password
@@ -95,7 +99,7 @@ Kirigami.ScrollablePage {
 
             Controls.Label {
                 Layout.fillWidth: true
-                visible: controller.draft.sourceKind !== "srt" &&
+                visible: controller.draft.sourceKind === "whep" &&
                          controller.draft.username !== "" &&
                          controller.hasStoredCredentialFor(controller.draft.whepUrl, controller.draft.username)
                 color: Kirigami.Theme.positiveTextColor
@@ -161,6 +165,67 @@ Kirigami.ScrollablePage {
                 onValueModified: controller.draft.srtLatencyMs = value
             }
 
+            Controls.TextField {
+                Kirigami.FormData.label: qsTr("Video URL:")
+                visible: controller.draft.sourceKind === "youtube"
+                enabled: visible
+                text: controller.draft.youtubeUrl
+                placeholderText: "https://www.youtube.com/watch?v=…"
+                onTextEdited: controller.draft.youtubeUrl = text
+            }
+
+            Controls.TextField {
+                Kirigami.FormData.label: qsTr("Format selector:")
+                visible: controller.draft.sourceKind === "youtube"
+                enabled: visible
+                placeholderText: qsTr("Empty for yt-dlp's default selection")
+                text: controller.draft.formatSelector
+                onTextEdited: controller.draft.formatSelector = text
+            }
+
+            Controls.TextField {
+                Kirigami.FormData.label: qsTr("Extra yt-dlp arguments:")
+                visible: controller.draft.sourceKind === "youtube"
+                enabled: visible
+                placeholderText: "--cookies-from-browser chrome"
+                text: controller.draft.extraArgs
+                onTextEdited: controller.draft.extraArgs = text
+            }
+
+            Controls.SpinBox {
+                Kirigami.FormData.label: qsTr("Audio bitrate (kbps):")
+                visible: controller.draft.sourceKind === "youtube" && controller.draft.audioEnabled
+                enabled: visible
+                from: 32
+                to: 510
+                stepSize: 8
+                value: controller.draft.audioBitrateKbps
+                onValueModified: controller.draft.audioBitrateKbps = value
+            }
+
+            Controls.SpinBox {
+                Kirigami.FormData.label: qsTr("Parallel fragments:")
+                visible: controller.draft.sourceKind === "youtube"
+                enabled: visible
+                from: 1
+                to: 16
+                value: controller.draft.concurrentFragments
+                onValueModified: controller.draft.concurrentFragments = value
+                Controls.ToolTip.text: qsTr("How many HLS fragments yt-dlp fetches at once (written to the pipe in order). 1 is strictly sequential.")
+                Controls.ToolTip.visible: hovered
+            }
+
+            Controls.ComboBox {
+                Kirigami.FormData.label: qsTr("Direct URL:")
+                visible: controller.draft.sourceKind === "youtube"
+                enabled: visible
+                model: ["auto", "off", "force"]
+                currentIndex: ["auto", "off", "force"].indexOf(controller.draft.directUrlMode)
+                onActivated: controller.draft.directUrlMode = model[currentIndex]
+                Controls.ToolTip.text: qsTr("auto: fetch a muxed H.264+AAC HLS stream directly with FFmpeg (no yt-dlp pipe, instant seek), falling back to the yt-dlp pipe. off: always pipe. force: prefer direct and warn when unavailable.")
+                Controls.ToolTip.visible: hovered
+            }
+
             Controls.CheckBox {
                 Kirigami.FormData.label: qsTr("Stream:")
                 text: qsTr("Enabled")
@@ -176,7 +241,7 @@ Kirigami.ScrollablePage {
 
             Controls.ComboBox {
                 Kirigami.FormData.label: qsTr("Preferred codec:")
-                visible: controller.draft.sourceKind !== "srt"
+                visible: controller.draft.sourceKind === "whep"
                 enabled: visible
                 model: ["h264", "h265"]
                 currentIndex: controller.draft.preferredCodecs[0] === "h265" ? 1 : 0

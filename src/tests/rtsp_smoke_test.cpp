@@ -173,7 +173,8 @@ int main(int argc, char **argv)
     std::uint32_t rtpTimestamp = 0;
     bool gotDatagram = false;
     for (int i = 0; i < 60 && !gotDatagram; ++i) {
-        sink.writeVideo(kH264Keyframe, sizeof(kH264Keyframe), rtpTimestamp, /*isKeyframe=*/true);
+        sink.writeVideo(kH264Keyframe, sizeof(kH264Keyframe), rtpTimestamp, rtpTimestamp,
+                        /*isKeyframe=*/true);
         rtpTimestamp += 3000; // 30 fps on the 90 kHz RTP clock
 
         if (udp.waitForReadyRead(250)) {

@@ -233,8 +233,10 @@ void WebRtcSource::onAnswer(const QString &sdpAnswer)
 
         m_videoTrack->onFrame([this](rtc::binary data, rtc::FrameInfo info) {
             if (m_onVideo && !data.empty()) {
+                // WebRTC's RTP timestamp is the presentation time and its H.264/HEVC encoders
+                // do not emit B-frames, so one clock serves both fields — behavior unchanged.
                 m_onVideo(reinterpret_cast<const std::uint8_t *>(data.data()), data.size(),
-                          info.timestamp);
+                          info.timestamp, info.timestamp);
             }
         });
 

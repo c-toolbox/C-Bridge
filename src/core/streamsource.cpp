@@ -21,7 +21,7 @@ void StreamSource::setVideoCallback(MediaFrameCallback callback)
     m_onVideo = std::move(callback);
 }
 
-void StreamSource::setAudioCallback(MediaFrameCallback callback)
+void StreamSource::setAudioCallback(AudioFrameCallback callback)
 {
     m_onAudio = std::move(callback);
 }

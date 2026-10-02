@@ -30,13 +30,17 @@ Controls.Dialog {
         configPathField.text = CBridgeSettings.configPath
         autoLoadLastCheck.checked = CBridgeSettings.autoLoadLastConfig
         startOnLoadCheck.checked = CBridgeSettings.startOnLoad
+        ytdlpPathField.text = CBridgeSettings.ytdlpPath
         root.streamRows = root.controller ? root.controller.streamAutoStarts() : []
     }
 
     function setDefaults() {
-        configPathField.text = CBridgeSettings.defaultConfigPathValue
+        // KConfig only generates public default accessors for non-empty defaults;
+        // ConfigPath and YtdlpPath both default to "" in cbridgesettings.kcfg.
+        configPathField.text = ""
         autoLoadLastCheck.checked = CBridgeSettings.defaultAutoLoadLastConfigValue
         startOnLoadCheck.checked = CBridgeSettings.defaultStartOnLoadValue
+        ytdlpPathField.text = ""
         var rows = root.controller ? root.controller.streamAutoStarts() : []
         for (var i = 0; i < rows.length; ++i) {
             rows[i].autoStart = false
@@ -51,6 +55,13 @@ Controls.Dialog {
         title: qsTr("Choose startup configuration")
         nameFilters: [qsTr("C-Bridge configuration (*.json)")]
         onAccepted: configPathField.text = app.urlToPath(selectedFile)
+    }
+
+    FileDialog {
+        id: ytdlpFileDialog
+        title: qsTr("Choose yt-dlp executable")
+        nameFilters: [qsTr("yt-dlp (yt-dlp.exe)"), qsTr("All files (*)")]
+        onAccepted: ytdlpPathField.text = app.urlToPath(selectedFile)
     }
 
     contentItem: Controls.ScrollView {
@@ -138,6 +149,35 @@ Controls.Dialog {
                     text: qsTr("No streams in the current configuration.")
                 }
             }
+
+            Kirigami.Heading {
+                Layout.fillWidth: true
+                level: 2
+                text: qsTr("yt-dlp")
+            }
+
+            Kirigami.FormLayout {
+                Layout.fillWidth: true
+
+                Controls.TextField {
+                    id: ytdlpPathField
+                    Kirigami.FormData.label: qsTr("Executable:")
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Leave empty to search PATH and D:/FFmpeg")
+                }
+                Controls.Button {
+                    text: qsTr("Browse…")
+                    icon.name: "document-open"
+                    icon.color: Kirigami.Theme.textColor
+                    onClicked: ytdlpFileDialog.open()
+                }
+
+                Controls.Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: qsTr("Used by YouTube streams that do not set their own yt-dlp path.")
+                }
+            }
         }
     }
 
@@ -171,6 +211,8 @@ Controls.Dialog {
                 icon.color: Kirigami.Theme.textColor
                 onClicked: {
                     if (root.controller) {
+                        // Persisted by the controller's final CBridgeSettings::save().
+                        CBridgeSettings.ytdlpPath = ytdlpPathField.text.trimmed()
                         root.controller.saveStartupSettings(configPathField.text,
                                                             autoLoadLastCheck.checked,
                                                             startOnLoadCheck.checked,

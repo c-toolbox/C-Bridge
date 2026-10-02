@@ -144,6 +144,72 @@ void StreamDraft::setSrtStreamId(const QString &streamId)
     Q_EMIT changed();
 }
 
+void StreamDraft::setYoutubeUrl(const QString &url)
+{
+    const QUrl parsed(url.trimmed());
+    if (m_config.youtube.url == parsed) {
+        return;
+    }
+    m_config.youtube.url = parsed;
+    Q_EMIT youtubeUrlChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setFormatSelector(const QString &selector)
+{
+    const QString trimmed = selector.trimmed();
+    if (m_config.youtube.formatSelector == trimmed) {
+        return;
+    }
+    m_config.youtube.formatSelector = trimmed;
+    Q_EMIT formatSelectorChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setExtraArgs(const QString &args)
+{
+    const QString trimmed = args.trimmed();
+    if (m_config.youtube.extraArgs == trimmed) {
+        return;
+    }
+    m_config.youtube.extraArgs = trimmed;
+    Q_EMIT extraArgsChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setAudioBitrateKbps(int kbps)
+{
+    const int clamped = qBound(32, kbps, 510);
+    if (m_config.youtube.audioBitrateKbps == clamped) {
+        return;
+    }
+    m_config.youtube.audioBitrateKbps = clamped;
+    Q_EMIT audioBitrateKbpsChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setConcurrentFragments(int fragments)
+{
+    const int clamped = qBound(1, fragments, 16);
+    if (m_config.youtube.concurrentFragments == clamped) {
+        return;
+    }
+    m_config.youtube.concurrentFragments = clamped;
+    Q_EMIT concurrentFragmentsChanged();
+    Q_EMIT changed();
+}
+
+void StreamDraft::setDirectUrlMode(const QString &mode)
+{
+    const QString normalized = (mode == u"off"_s || mode == u"force"_s) ? mode : u"auto"_s;
+    if (m_config.youtube.directUrlMode == normalized) {
+        return;
+    }
+    m_config.youtube.directUrlMode = normalized;
+    Q_EMIT directUrlModeChanged();
+    Q_EMIT changed();
+}
+
 void StreamDraft::setAudioEnabled(bool enabled)
 {
     if (m_config.audioEnabled == enabled) {
@@ -212,6 +278,10 @@ void StreamDraft::load(const StreamConfig &config)
     Q_EMIT srtPassphraseChanged();
     Q_EMIT srtLatencyMsChanged();
     Q_EMIT srtStreamIdChanged();
+    Q_EMIT youtubeUrlChanged();
+    Q_EMIT formatSelectorChanged();
+    Q_EMIT extraArgsChanged();
+    Q_EMIT audioBitrateKbpsChanged();
     Q_EMIT audioEnabledChanged();
     Q_EMIT preferredCodecsChanged();
     Q_EMIT reconnectInitialMsChanged();

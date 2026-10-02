@@ -73,6 +73,7 @@ QString toString(SourceKind kind)
     switch (kind) {
     case SourceKind::Whep: return u"whep"_s;
     case SourceKind::Srt: return u"srt"_s;
+    case SourceKind::Youtube: return u"youtube"_s;
     }
     return u"unknown"_s;
 }
@@ -89,6 +90,9 @@ SourceKind sourceKindFromString(const QString &text, bool *ok)
     if (normalized == u"srt"_s) {
         return SourceKind::Srt;
     }
+    if (normalized == u"youtube"_s || normalized == u"yt-dlp"_s) {
+        return SourceKind::Youtube;
+    }
     if (ok) {
         *ok = false;
     }
@@ -101,6 +105,7 @@ QString toString(StreamState state)
     case StreamState::Idle: return u"Idle"_s;
     case StreamState::Connecting: return u"Connecting"_s;
     case StreamState::Running: return u"Running"_s;
+    case StreamState::Paused: return u"Paused"_s;
     case StreamState::Retrying: return u"Retrying"_s;
     case StreamState::Failed: return u"Failed"_s;
     case StreamState::Stopping: return u"Stopping"_s;

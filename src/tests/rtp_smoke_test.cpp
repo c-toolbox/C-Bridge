@@ -169,7 +169,7 @@ static void runCase(int videoPort, int audioPort, CBridge::AudioCodec audioCodec
     std::uint32_t audioTimestamp = 0;
     for (int i = 0; i < 120 && (videoMedia == 0 || audioMedia == 0); ++i) {
         const bool keyframe = (i % 30) == 0;
-        sink.writeVideo(kH264Keyframe, sizeof(kH264Keyframe), videoTimestamp, keyframe);
+        sink.writeVideo(kH264Keyframe, sizeof(kH264Keyframe), videoTimestamp, videoTimestamp, keyframe);
         videoTimestamp += 3000; // 30 fps on the 90 kHz RTP clock
 
         sink.writeAudio(audioPacket, audioPacketSize, audioTimestamp);

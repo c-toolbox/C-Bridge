@@ -36,6 +36,11 @@ public:
         QueueDepthRole,
         ReconnectsRole,
         LastErrorRole,
+        PositionRole,
+        DurationRole,
+        LiveRole,
+        ControllableRole,
+        LastEventRole,
     };
 
     explicit StreamListModel(QObject *parent = nullptr);

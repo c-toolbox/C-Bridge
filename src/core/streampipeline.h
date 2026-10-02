@@ -25,6 +25,7 @@ namespace CBridge {
 
 class StreamSink;
 class StreamSource;
+class StreamPreview;
 
 /// Runs one stream end to end: source in (WHEP or SRT), N sinks out.
 ///
@@ -45,6 +46,20 @@ public:
     /// The transport this pipeline pulls from (SRT or WHEP). Only valid between start() and
     /// stop(); exposed for diagnostics and tests.
     StreamSource *source() const { return m_source; }
+
+    /// This stream's built-in viewer, created with the pipeline and owned by it. It stays
+    /// inert (no decode, no audio device) until a viewer window attaches through
+    /// StreamPreview::setActive(). Never null once the pipeline exists.
+    StreamPreview *preview() const { return m_preview; }
+
+    // --- Playback control ---------------------------------------------------------------
+    // Forwarded to the source, which decides whether it can honour them. Safe from the GUI
+    // thread: the source implements these as plain atomic flags (see StreamSource).
+    bool isPlaybackControllable() const;
+    bool isLive() const;
+    void requestPause();
+    void requestResume();
+    void requestSeek(qint64 positionMs);
 
     void setPassword(const QString &password);
 
@@ -72,6 +87,7 @@ private:
     QString m_password;
 
     StreamSource *m_source = nullptr;
+    StreamPreview *m_preview = nullptr;
     std::vector<std::unique_ptr<StreamSink>> m_sinks;
 
     MediaQueue m_queue;
@@ -81,6 +97,11 @@ private:
     BitstreamInspector m_inspector;
     bool m_sinksOpen = false;
     bool m_sawKeyframe = false;
+
+    /// Set by the GUI thread's scheduleReconnect() and consumed by the worker's pump loop,
+    /// which owns the sinks: the worker closes them and re-arms the keyframe gate on its own
+    /// thread, so the GUI thread never touches a sink a worker might still be writing to.
+    std::atomic_bool m_pendingGateReset { false };
 
     /// True while the negotiated audio is Opus, so the Opus payload sanitizer runs. AAC
     /// packets are passed through untouched (the sanitizer's checks are RFC 6716 framing).

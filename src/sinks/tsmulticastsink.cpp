@@ -59,6 +59,20 @@ int audioClockRate(const StreamFormat &format)
     return format.audioSampleRate > 0 ? format.audioSampleRate : kRtpAudioClock;
 }
 
+/// FFmpeg's muxer rejects non-monotonically increasing dts with EINVAL (mux.c
+/// prepare_input_packet). A restarted feed — a reconnect or a looping source — resets its
+/// timestamps near zero, which would fail every write until the new timeline catches up.
+/// Continue the muxer timeline from where it left off instead; for an uninterrupted feed
+/// this never triggers and the output is byte-identical to before.
+qint64 keepMonotonic(qint64 out, qint64 &lastOut, qint64 minStep)
+{
+    if (lastOut >= 0 && out <= lastOut) {
+        out = lastOut + qMax<qint64>(1, minStep);
+    }
+    lastOut = out;
+    return out;
+}
+
 } // namespace
 
 TsMulticastSink::TsMulticastSink(TsMulticastSinkConfig config)
@@ -140,7 +154,10 @@ bool TsMulticastSink::addAudioStream(const StreamFormat &format, QString *error)
     }
 
     m_audioClock = audioClockRate(format);
-    m_audioStream->time_base = AVRational { 1, m_audioClock };
+    // The mpegts muxer writes pkt->pts verbatim onto the 90 kHz PES grid and ignores
+    // st->time_base, so the stream must sit on the video clock. Sample-rate conversion
+    // happens in writeAudio().
+    m_audioStream->time_base = AVRational { 1, kRtpVideoClock };
     return true;
 }
 
@@ -208,10 +225,13 @@ bool TsMulticastSink::open(const StreamFormat &format, QString *error)
         return false;
     }
 
-    m_videoLastRaw = -1;
+
+    m_videoLastRawDts = -1;
     m_audioLastRaw = -1;
-    m_videoOffset = 0;
+    m_videoOffsetDts = 0;
     m_audioOffset = 0;
+    m_videoLastRawPts = -1;
+    m_videoOffsetPts = 0;
     m_ptsBase = -1;
     m_open = true;
     return true;
@@ -236,6 +256,17 @@ void TsMulticastSink::close()
     m_videoStream = nullptr;
     m_audioStream = nullptr;
     m_audioClock = 48000;
+    // Full timestamp reset: a re-opened sink must not inherit the previous session's
+    // anchors or wraparound state.
+    m_videoLastRawDts = -1;
+    m_videoOffsetDts = 0;
+    m_videoLastRawPts = -1;
+    m_videoOffsetPts = 0;
+    m_audioLastRaw = -1;
+    m_audioOffset = 0;
+    m_ptsBase = -1;
+    m_lastVideoOut = -1;
+    m_lastAudioOut = -1;
     m_open = false;
 }
 
@@ -257,7 +288,7 @@ qint64 TsMulticastSink::unwrap(std::uint32_t rtpTimestamp, qint64 &lastRaw, qint
 }
 
 bool TsMulticastSink::writePacket(AVStream *stream, const std::uint8_t *data, std::size_t size,
-                                  qint64 pts, bool isKeyframe)
+                                  qint64 pts, qint64 dts, bool isKeyframe)
 {
     av_packet_unref(m_packet);
 
@@ -267,8 +298,11 @@ bool TsMulticastSink::writePacket(AVStream *stream, const std::uint8_t *data, st
     std::memcpy(m_packet->data, data, size);
 
     m_packet->stream_index = stream->index;
+    // Both fields matter: the mpegts muxer writes them into the PES headers, and a B-frame
+    // stream needs PTS in presentation order (non-monotonic in decode order) with DTS kept
+    // monotonic for interleaving. Collapsing them is what made player clocks jump around.
     m_packet->pts = pts;
-    m_packet->dts = pts;
+    m_packet->dts = dts;
     m_packet->duration = 0;
     if (isKeyframe) {
         m_packet->flags |= AV_PKT_FLAG_KEY;
@@ -288,18 +322,27 @@ bool TsMulticastSink::writePacket(AVStream *stream, const std::uint8_t *data, st
 }
 
 bool TsMulticastSink::writeVideo(const std::uint8_t *data, std::size_t size,
-                                 std::uint32_t rtpTimestamp, bool isKeyframe)
+                                 std::uint32_t dtsTimestamp, std::uint32_t ptsTimestamp,
+                                 bool isKeyframe)
 {
     if (!m_open || !m_videoStream || size == 0) {
         return false;
     }
 
-    const qint64 absolute = unwrap(rtpTimestamp, m_videoLastRaw, m_videoOffset);
+    const qint64 dtsAbsolute = unwrap(dtsTimestamp, m_videoLastRawDts, m_videoOffsetDts);
+    const qint64 ptsAbsolute = unwrap(ptsTimestamp, m_videoLastRawPts, m_videoOffsetPts);
     if (m_ptsBase < 0) {
-        m_ptsBase = absolute;
+        m_ptsBase = dtsAbsolute;
     }
 
-    return writePacket(m_videoStream, data, size, absolute - m_ptsBase, isKeyframe);
+    // A restarted feed resets its timestamps near zero; keep the muxer's dts monotonic. The
+    // guard runs on DTS only — PTS is allowed to run backwards by the B-frame reordering depth,
+    // which is exactly what a playable TS needs (mux.c checks DTS alone).
+    const qint64 outDts = keepMonotonic(dtsAbsolute - m_ptsBase, m_lastVideoOut, kRtpVideoClock / 30);
+
+    // Ride the PTS on the same shift so a forced dts step never breaks A/V sync.
+    const qint64 outPts = outDts + (ptsAbsolute - dtsAbsolute);
+    return writePacket(m_videoStream, data, size, outPts, outDts, isKeyframe);
 }
 
 bool TsMulticastSink::writeAudio(const std::uint8_t *data, std::size_t size,
@@ -315,14 +358,17 @@ bool TsMulticastSink::writeAudio(const std::uint8_t *data, std::size_t size,
 
     const qint64 absolute = unwrap(rtpTimestamp, m_audioLastRaw, m_audioOffset);
 
-    // The audio clock is the stream's sample rate (48 kHz for Opus, whatever the demuxer
-    // reported for AAC) while m_ptsBase is on the 90 kHz video clock, so rebase in the
-    // video domain and express the result in the audio timebase.
+    // The input runs on the stream's sample-rate clock (48 kHz for Opus, whatever the demuxer
+    // reported for AAC) while m_ptsBase is on the 90 kHz video clock. Convert to video-domain
+    // ticks and rebase there: the mpegts muxer writes pkt->pts verbatim onto the 90 kHz PES
+    // grid, so expressing audio in sample-rate units would make it play at 90k/sampleRate speed.
     const int audioClock = m_audioClock > 0 ? m_audioClock : kRtpAudioClock;
-    const qint64 videoDomain = av_rescale(absolute, kRtpVideoClock, audioClock);
-    const qint64 rebased = av_rescale(videoDomain - m_ptsBase, audioClock, kRtpVideoClock);
+    const qint64 rebased = av_rescale(absolute, kRtpVideoClock, audioClock) - m_ptsBase;
 
-    return writePacket(m_audioStream, data, size, rebased, true);
+    // Same monotonicity guard as writeVideo: one step is a 20 ms frame on the video clock.
+    // Audio has no decode/display split, so the guarded value serves both fields.
+    const qint64 out = keepMonotonic(rebased, m_lastAudioOut, kRtpVideoClock / 50);
+    return writePacket(m_audioStream, data, size, out, out, true);
 }
 
 } // namespace CBridge

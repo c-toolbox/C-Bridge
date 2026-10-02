@@ -8,6 +8,7 @@
 #include "core/bridgeengine.h"
 
 #include "core/streampipeline.h"
+#include "preview/streampreview.h"
 
 #include <QTimer>
 
@@ -164,6 +165,45 @@ StreamStats BridgeEngine::statsFor(const QString &streamId) const
 QList<SinkStats> BridgeEngine::sinkStatsFor(const QString &streamId) const
 {
     return m_sinkStats.value(streamId);
+}
+
+StreamPreview *BridgeEngine::previewFor(const QString &streamId) const
+{
+    StreamPipeline *pipeline = m_pipelines.value(streamId);
+    return pipeline ? pipeline->preview() : nullptr;
+}
+
+bool BridgeEngine::isPlaybackControllable(const QString &streamId) const
+{
+    StreamPipeline *pipeline = m_pipelines.value(streamId);
+    return pipeline && pipeline->isPlaybackControllable();
+}
+
+bool BridgeEngine::isLive(const QString &streamId) const
+{
+    StreamPipeline *pipeline = m_pipelines.value(streamId);
+    return pipeline && pipeline->isLive();
+}
+
+void BridgeEngine::requestPause(const QString &streamId)
+{
+    if (StreamPipeline *pipeline = m_pipelines.value(streamId)) {
+        pipeline->requestPause();
+    }
+}
+
+void BridgeEngine::requestResume(const QString &streamId)
+{
+    if (StreamPipeline *pipeline = m_pipelines.value(streamId)) {
+        pipeline->requestResume();
+    }
+}
+
+void BridgeEngine::requestSeek(const QString &streamId, qint64 positionMs)
+{
+    if (StreamPipeline *pipeline = m_pipelines.value(streamId)) {
+        pipeline->requestSeek(positionMs);
+    }
 }
 
 double BridgeEngine::aggregateInputMbps() const

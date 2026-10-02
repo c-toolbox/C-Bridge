@@ -243,6 +243,8 @@ void RtpMulticastSink::closeStream(RtpStreamContext &stream)
     stream.lastRaw = -1;
     stream.offset = 0;
     stream.base = -1;
+    stream.lastRawPts = -1;
+    stream.offsetPts = 0;
     stream.stripAdtsHeader = false;
 }
 
@@ -287,25 +289,25 @@ void RtpMulticastSink::close()
     m_open = false;
 }
 
-qint64 RtpMulticastSink::unwrapTimestamp(std::uint32_t rtpTimestamp, RtpStreamContext &stream)
+qint64 RtpMulticastSink::unwrapTimestamp(std::uint32_t rtpTimestamp, qint64 &lastRaw, qint64 &offset)
 {
     const qint64 raw = qint64(rtpTimestamp);
 
-    if (stream.lastRaw >= 0) {
-        const qint64 delta = raw - stream.lastRaw;
+    if (lastRaw >= 0) {
+        const qint64 delta = raw - lastRaw;
         if (delta < -(kRtpWrap / 2)) {
-            stream.offset += kRtpWrap;
+            offset += kRtpWrap;
         } else if (delta > (kRtpWrap / 2)) {
-            stream.offset -= kRtpWrap;
+            offset -= kRtpWrap;
         }
     }
 
-    stream.lastRaw = raw;
-    return raw + stream.offset;
+    lastRaw = raw;
+    return raw + offset;
 }
 
 bool RtpMulticastSink::writePacket(RtpStreamContext &stream, const std::uint8_t *data, std::size_t size,
-                                   qint64 pts, bool isKeyframe)
+                                   qint64 pts, qint64 dts, bool isKeyframe)
 {
     av_packet_unref(stream.packet);
 
@@ -315,8 +317,11 @@ bool RtpMulticastSink::writePacket(RtpStreamContext &stream, const std::uint8_t 
     std::memcpy(stream.packet->data, data, size);
 
     stream.packet->stream_index = 0; // each context carries exactly one stream
+    // The rtp muxer stamps the wire with pkt->pts (rtpenc.c), which per RFC 6184 is the
+    // presentation time, while mux.c's interleave check wants a monotonic DTS. Keeping both
+    // apart is what makes B-frame streams playable instead of jumping back and forth.
     stream.packet->pts = pts;
-    stream.packet->dts = pts;
+    stream.packet->dts = dts;
     stream.packet->duration = 0;
     if (isKeyframe) {
         stream.packet->flags |= AV_PKT_FLAG_KEY;
@@ -337,20 +342,26 @@ bool RtpMulticastSink::writePacket(RtpStreamContext &stream, const std::uint8_t 
     return true;
 }
 
-bool RtpMulticastSink::writeVideo(const std::uint8_t *data, std::size_t size, std::uint32_t rtpTimestamp,
+bool RtpMulticastSink::writeVideo(const std::uint8_t *data, std::size_t size,
+                                  std::uint32_t dtsTimestamp, std::uint32_t ptsTimestamp,
                                   bool isKeyframe)
 {
     if (!m_open || !m_video.format || size == 0) {
         return false;
     }
 
-    const qint64 absolute = unwrapTimestamp(rtpTimestamp, m_video);
+    const qint64 dtsAbsolute = unwrapTimestamp(dtsTimestamp, m_video.lastRaw, m_video.offset);
+    const qint64 ptsAbsolute = unwrapTimestamp(ptsTimestamp, m_video.lastRawPts, m_video.offsetPts);
     if (m_video.base < 0) {
-        m_video.base = absolute;
+        m_video.base = dtsAbsolute;
     }
 
-    // The rtp muxer expects pts in units of the stream clock (90 kHz for video).
-    return writePacket(m_video, data, size, absolute - m_video.base, isKeyframe);
+    // The rtp muxer expects timestamps in units of the stream clock (90 kHz for video). DTS
+    // stays monotonic for the interleave check; PTS rides on the same rebase so a B-frame's
+    // presentation offset survives to the wire.
+    const qint64 outDts = dtsAbsolute - m_video.base;
+    const qint64 outPts = outDts + (ptsAbsolute - dtsAbsolute);
+    return writePacket(m_video, data, size, outPts, outDts, isKeyframe);
 }
 
 bool RtpMulticastSink::writeAudio(const std::uint8_t *data, std::size_t size, std::uint32_t rtpTimestamp)
@@ -359,7 +370,7 @@ bool RtpMulticastSink::writeAudio(const std::uint8_t *data, std::size_t size, st
         return false;
     }
 
-    const qint64 absolute = unwrapTimestamp(rtpTimestamp, m_audio);
+    const qint64 absolute = unwrapTimestamp(rtpTimestamp, m_audio.lastRaw, m_audio.offset);
     if (m_audio.base < 0) {
         m_audio.base = absolute;
     }
@@ -376,7 +387,9 @@ bool RtpMulticastSink::writeAudio(const std::uint8_t *data, std::size_t size, st
 
     // Each RTP stream has its own base timestamp and SSRC, so audio is rebased to its
     // first packet independently of the video clock - receivers align streams via RTCP.
-    return writePacket(m_audio, data, size, absolute - m_audio.base, true);
+    // Audio has no decode/display split: one value serves both fields.
+    const qint64 out = absolute - m_audio.base;
+    return writePacket(m_audio, data, size, out, out, true);
 }
 
 } // namespace CBridge

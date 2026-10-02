@@ -126,6 +126,31 @@ public:
     Q_INVOKABLE void saveStartupSettings(const QString &configPath, bool autoLoadLastConfig,
                                          bool startOnLoad, const QVariantList &streamRows);
 
+    // --- Built-in viewer -----------------------------------------------------------------
+
+    /// The viewer object of a running stream, or null when it is not running. The preview
+    /// window binds a VideoOutput to its videoSink and toggles its active/muted properties.
+    /// Returns a QObject so QML can reach the Q_PROPERTYs without a registered type.
+    Q_INVOKABLE QObject *previewFor(const QString &streamId) const;
+
+    // --- YouTube VOD playback control ------------------------------------------------------
+
+    /// True when the stream is running and its source supports pause/resume/seek.
+    Q_INVOKABLE bool isPlaybackControllable(const QString &streamId) const;
+    /// True when the running stream's media timeline is live: the UI hides the seek slider.
+    Q_INVOKABLE bool isLiveStream(const QString &streamId) const;
+    Q_INVOKABLE void pauseStream(const QString &streamId);
+    Q_INVOKABLE void resumeStream(const QString &streamId);
+    /// Jumps a VOD stream to `positionSeconds`. Seeks respawn the yt-dlp child, so the UI
+    /// commits this on slider release, not on every move.
+    Q_INVOKABLE void seekStream(const QString &streamId, double positionSeconds);
+    /// Media clock of a running stream from the engine's cached stats (0 when not running).
+    Q_INVOKABLE double streamPositionSeconds(const QString &streamId) const;
+    Q_INVOKABLE double streamDurationSeconds(const QString &streamId) const;
+    /// The engine's cached state string for a stream ("Running", "Paused", ...), for the
+    /// preview window's transport button.
+    Q_INVOKABLE QString streamState(const QString &streamId) const;
+
 Q_SIGNALS:
     void configChanged();
     void dirtyChanged();
@@ -133,6 +158,10 @@ Q_SIGNALS:
     void statsUpdated();
     void statusMessageChanged();
     void draftProblemsChanged();
+    /// Emitted when a stream's pipeline is torn down (stopped, removed, config reloaded):
+    /// any open preview window for that stream must close, since its preview object dies
+    /// together with the pipeline.
+    void previewInvalidated(const QString &streamId);
 
 private:
     void setStatusMessage(const QString &message);

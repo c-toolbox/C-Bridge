@@ -40,6 +40,7 @@ Q_ENUM_NS(SinkKind)
 enum class SourceKind {
     Whep, // WHEP/WebRTC pull from MediaMTX
     Srt,  // SRT receive: MPEG-TS over the srt:// protocol
+    Youtube, // YouTube via a yt-dlp child process (HLS pipe + AAC→Opus transcode)
 };
 Q_ENUM_NS(SourceKind)
 
@@ -47,6 +48,9 @@ enum class StreamState {
     Idle,
     Connecting,
     Running,
+    /// A controllable source (YouTube VOD) whose delivery is suspended; see
+    /// StreamSource::requestPause(). Only sources with playback control ever report it.
+    Paused,
     Retrying,
     Failed,
     Stopping,
@@ -96,6 +100,20 @@ struct StreamStats {
 
     qint64 lastFrameEpochMs = 0;
     QString lastError;
+
+    /// Playback position and total duration in seconds, copied from the source on every
+    /// stats sample. Both stay 0 for sources without playback control (WHEP, SRT) and for
+    /// live sources (duration unknown). See StreamSource::mediaPositionSeconds().
+    double positionSeconds = 0.0;
+    double durationSeconds = 0.0;
+
+    /// True when the source reports a live media timeline (no seekable duration).
+    bool live = false;
+
+    /// The source's last notable recovery event (stall resume, direct-url switch, ...),
+    /// copied from StreamSource::lastEvent() on every sample. Empty for sources without
+    /// recovery behaviour, and for a source that has simply been running uninterrupted.
+    QString lastEvent;
 };
 
 } // namespace CBridge

@@ -55,9 +55,14 @@ public:
     virtual void close() = 0;
     virtual bool isOpen() const = 0;
 
-    /// rtpTimestamp is the 90 kHz RTP clock for video and the 48 kHz clock for audio.
+    /// dtsTimestamp is the decode-order clock (90 kHz for video, the sample rate for audio) a
+    /// muxer interleaves on and must keep monotonic; ptsTimestamp is the presentation-order
+    /// clock players display. They are equal for audio and B-frame-free video; with B-frames
+    /// they differ by the reordering depth, and sinks must keep both apart so containers stay
+    /// playable (a single collapsed value makes player clocks jump back and forth).
     virtual bool writeVideo(const std::uint8_t *data, std::size_t size,
-                            std::uint32_t rtpTimestamp, bool isKeyframe) = 0;
+                            std::uint32_t dtsTimestamp, std::uint32_t ptsTimestamp,
+                            bool isKeyframe) = 0;
     virtual bool writeAudio(const std::uint8_t *data, std::size_t size,
                             std::uint32_t rtpTimestamp) = 0;
 

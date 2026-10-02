@@ -185,13 +185,15 @@ void NdiSink::close()
 }
 
 bool NdiSink::writeVideo(const std::uint8_t *data, std::size_t size,
-                         std::uint32_t rtpTimestamp, bool)
+                         std::uint32_t dtsTimestamp, std::uint32_t ptsTimestamp, bool)
 {
+    Q_UNUSED(dtsTimestamp) // the presentation clock drives the NDI timecode; DTS is for muxers
+
     if (!m_videoDecoder.isOpen() || size == 0) {
         return false;
     }
 
-    const std::int64_t raw = std::int64_t(rtpTimestamp);
+    const std::int64_t raw = std::int64_t(ptsTimestamp);
     if (m_videoLastRaw >= 0) {
         const std::int64_t delta = raw - m_videoLastRaw;
         if (delta < -(kRtpWrap / 2)) {

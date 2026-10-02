@@ -28,4 +28,10 @@
       <default></default>
     </entry>
   </group>
+  <group name="YtDlpSettings">
+    <entry name="YtdlpPath" type="String">
+      <label>Path to the yt-dlp executable used by YouTube streams that do not set their own.</label>
+      <default></default>
+    </entry>
+  </group>
 </kcfg>

@@ -8,12 +8,14 @@
 #include "core/streampipeline.h"
 
 #include "media/opuspayloadsanitizer.h"
+#include "preview/streampreview.h"
 #include "sinks/streamsink.h"
 #include "sinks/rtpmulticastsink.h"
 #include "sinks/rtspsink.h"
 #include "sinks/tsmulticastsink.h"
 #include "srt/srtsource.h"
 #include "webrtc/webrtcsource.h"
+#include "ytdlp/ytdlpsource.h"
 
 #ifdef CBRIDGE_NDI_SUPPORT
 #include "sinks/ndisink.h"
@@ -28,7 +30,12 @@ namespace CBridge {
 StreamPipeline::StreamPipeline(StreamConfig config, QObject *parent)
     : QObject(parent)
     , m_config(std::move(config))
+    // The yt-dlp source gets a deeper shed buffer: its fetch path (yt-dlp child or the HLS
+    // reader) can stall for seconds on network hiccups, and a sink hiccup behind that should
+    // shed from ~16 s of slack, not the 240-unit default. m_config is initialised first.
+    , m_queue(m_config.sourceKind == SourceKind::Youtube ? 480 : 240)
     , m_reconnectDelayMs(m_config.reconnectInitialMs)
+    , m_preview(new StreamPreview(this))
 {
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setSingleShot(true);
@@ -49,6 +56,42 @@ void StreamPipeline::setPassword(const QString &password)
     m_password = password;
 }
 
+// --- Playback control -------------------------------------------------------------
+// The source owns the media timeline; these are thin forwarders guarded on a live source.
+// Each call is user-initiated and lands on an atomic in the source, so no synchronisation
+// is needed here beyond the null check (stop() clears m_source on this same thread).
+
+bool StreamPipeline::isPlaybackControllable() const
+{
+    return m_source && m_source->isPlaybackControllable();
+}
+
+bool StreamPipeline::isLive() const
+{
+    return m_source && m_source->isLive();
+}
+
+void StreamPipeline::requestPause()
+{
+    if (m_source) {
+        m_source->requestPause();
+    }
+}
+
+void StreamPipeline::requestResume()
+{
+    if (m_source) {
+        m_source->requestResume();
+    }
+}
+
+void StreamPipeline::requestSeek(qint64 positionMs)
+{
+    if (m_source) {
+        m_source->requestSeek(positionMs);
+    }
+}
+
 void StreamPipeline::setState(StreamState state)
 {
     {
@@ -64,6 +107,13 @@ StreamStats StreamPipeline::stats() const
     StreamStats copy = m_stats;
     copy.queueDepth = int(m_queue.size());
     copy.droppedFrames = m_queue.dropped();
+    if (m_source) {
+        // The media clock rides the existing 1 Hz stats poll instead of its own signal.
+        copy.positionSeconds = m_source->mediaPositionSeconds();
+        copy.durationSeconds = m_source->mediaDurationSeconds();
+        copy.live = m_source->isLive();
+        copy.lastEvent = m_source->lastEvent();
+    }
     return copy;
 }
 
@@ -100,6 +150,7 @@ void StreamPipeline::start()
     m_sinksOpen = false;
     m_parameterSets.clear();
     m_parameterSetsConsumed = false;
+    m_pendingGateReset.store(false, std::memory_order_relaxed);
     m_reconnectDelayMs = m_config.reconnectInitialMs;
 
     for (const SinkConfig &sinkConfig : m_config.sinks) {
@@ -140,6 +191,10 @@ void StreamPipeline::start()
 
     if (m_config.sourceKind == SourceKind::Srt) {
         m_source = new SrtSource(this);
+    } else if (m_config.sourceKind == SourceKind::Youtube) {
+        // The yt-dlp source resolves its own executable path (stream config → app settings →
+        // PATH → machine fallback) inside run(), so nothing extra is needed here.
+        m_source = new YtdlpSource(this);
     } else {
         auto *whep = new WebRtcSource(this);
         whep->setPassword(m_password);
@@ -147,10 +202,12 @@ void StreamPipeline::start()
     }
     m_source->setConfig(m_config);
 
-    m_source->setVideoCallback([this](const std::uint8_t *data, std::size_t size, quint32 ts) {
+    m_source->setVideoCallback([this](const std::uint8_t *data, std::size_t size, quint32 dtsTs,
+                                      quint32 ptsTs) {
         MediaUnit unit;
         unit.kind = MediaUnit::Kind::Video;
-        unit.rtpTimestamp = ts;
+        unit.dtsTimestamp = dtsTs;
+        unit.ptsTimestamp = ptsTs;
         unit.payload.assign(data, data + size);
         m_queue.push(std::move(unit));
     });
@@ -159,7 +216,9 @@ void StreamPipeline::start()
         m_source->setAudioCallback([this](const std::uint8_t *data, std::size_t size, quint32 ts) {
             MediaUnit unit;
             unit.kind = MediaUnit::Kind::Audio;
-            unit.rtpTimestamp = ts;
+            // Audio has no decode/display split: one clock serves both fields.
+            unit.dtsTimestamp = ts;
+            unit.ptsTimestamp = ts;
             unit.payload.assign(data, data + size);
             m_queue.push(std::move(unit));
         });
@@ -197,15 +256,13 @@ void StreamPipeline::scheduleReconnect()
         return;
     }
 
-    closeSinks();
-    m_sawKeyframe = false;
-    m_parameterSets.clear();
-    m_parameterSetsConsumed = false;
-
-    {
-        std::lock_guard lock(m_statsMutex);
-        ++m_stats.reconnectCount;
-    }
+    // The sinks are the worker thread's alone: closing them here (on the GUI thread, from
+    // the source's queued stateChanged) would race a worker still draining its queue into
+    // them — reachable whenever a source fails right after a burst of packets (a direct
+    // URL that 403s, a child that dies mid-stream, a local file that EOFs instantly).
+    // Hand the teardown to the worker instead: it re-arms the gate and closes the sinks
+    // on its own thread at the top of the next video unit (see handleVideoUnit).
+    m_pendingGateReset.store(true, std::memory_order_relaxed);
 
     setState(StreamState::Retrying);
     m_reconnectTimer->start(m_reconnectDelayMs);
@@ -224,8 +281,6 @@ void StreamPipeline::stop()
 
     if (m_source) {
         m_source->stop();
-        m_source->deleteLater();
-        m_source = nullptr;
     }
 
     m_queue.stop();
@@ -233,6 +288,15 @@ void StreamPipeline::stop()
         m_worker.join();
     }
     m_queue.clear();
+
+    // The worker is joined and can no longer reach the source or the preview, so both can be
+    // released now: the source with the GUI-thread delete, the preview's decoder with the
+    // shutdown that must not race the worker.
+    if (m_source) {
+        m_source->deleteLater();
+        m_source = nullptr;
+    }
+    m_preview->shutdown();
 
     closeSinks();
     m_sinks.clear();
@@ -270,6 +334,9 @@ bool StreamPipeline::openSinks()
         format.width = m_stats.width;
         format.height = m_stats.height;
     }
+
+    // The viewer decodes the same bitstream the sinks receive, so it needs the same format.
+    m_preview->configure(format);
 
     bool anyOpen = false;
     for (auto &sink : m_sinks) {
@@ -352,9 +419,16 @@ void StreamPipeline::handleVideoUnit(const MediaUnit &unit)
 
     for (auto &sink : m_sinks) {
         if (sink->isOpen()) {
-            sink->writeVideo(payload, payloadSize, unit.rtpTimestamp, info.isKeyframe);
+            sink->writeVideo(payload, payloadSize, unit.dtsTimestamp, unit.ptsTimestamp,
+                             info.isKeyframe);
         }
     }
+
+    // The viewer tap: the same Annex-B units, parameter sets included, so the preview's
+    // decoder can open and resynchronise exactly like the NDI sink's does. No-ops while no
+    // viewer window is attached.
+    m_preview->writeVideo(payload, payloadSize, unit.dtsTimestamp, unit.ptsTimestamp,
+                          info.isKeyframe);
 
     updateSinkStats();
 
@@ -387,9 +461,11 @@ void StreamPipeline::handleAudioUnit(const MediaUnit &unit)
 
     for (auto &sink : m_sinks) {
         if (sink->isOpen()) {
-            sink->writeAudio(unit.payload.data(), payloadSize, unit.rtpTimestamp);
+            sink->writeAudio(unit.payload.data(), payloadSize, unit.dtsTimestamp);
         }
     }
+
+    m_preview->writeAudio(unit.payload.data(), payloadSize, unit.dtsTimestamp);
 
     std::lock_guard lock(m_statsMutex);
     ++m_stats.audioFramesIn;
@@ -402,6 +478,28 @@ void StreamPipeline::workerLoop()
     while (m_running.load(std::memory_order_relaxed)) {
         if (!m_queue.pop(unit)) {
             break;
+        }
+
+        // Two events look identical to the sinks and are both handled here, on the worker
+        // thread that owns them: a source that restarted its media timeline in place (a
+        // seeked or resumed yt-dlp generation — takeGenerationRestartPending), and a
+        // reconnect the GUI thread scheduled after a failure (m_pendingGateReset). Either
+        // way: close the sinks, re-arm the keyframe gate, and let the next IDR reopen
+        // everything. Doing it here — before either unit kind is dispatched — is what keeps
+        // the GUI thread from ever touching the sinks: closing them from scheduleReconnect()
+        // raced a worker still draining its queue into them. The preview follows the reset.
+        const bool sourceRestarted = m_source && m_source->takeGenerationRestartPending();
+        const bool reconnectPending = m_pendingGateReset.exchange(false, std::memory_order_relaxed);
+        if (sourceRestarted || reconnectPending) {
+            closeSinks();
+            m_sawKeyframe = false;
+            m_parameterSets.clear();
+            m_parameterSetsConsumed = false;
+            m_preview->reset();
+            if (reconnectPending) {
+                std::lock_guard lock(m_statsMutex);
+                ++m_stats.reconnectCount;
+            }
         }
 
         if (unit.kind == MediaUnit::Kind::Video) {

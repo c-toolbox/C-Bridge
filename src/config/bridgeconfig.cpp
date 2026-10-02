@@ -27,18 +27,18 @@ int clampInt(int value, int lo, int hi)
     return std::min(hi, std::max(lo, value));
 }
 
-/// QVariant::toInt()/toBool() have no default-value overload; a missing key must fall back
-/// explicitly instead of silently becoming 0/false.
+/// QVariant::toInt()/toBool() have no default-value overload, and a QJsonValue converted to
+/// a QVariant stays *valid* even when the key is absent (it is Undefined, not invalid), so
+/// toInt() would silently yield 0. The presence test must be contains(); only then does a
+/// missing key fall back instead of becoming 0/false.
 int jsonInt(const QJsonObject &json, const QString &key, int fallback)
 {
-    const QVariant value = json.value(key);
-    return value.isValid() ? value.toInt() : fallback;
+    return json.contains(key) ? json.value(key).toInt() : fallback;
 }
 
 bool jsonBool(const QJsonObject &json, const QString &key, bool fallback)
 {
-    const QVariant value = json.value(key);
-    return value.isValid() ? value.toBool() : fallback;
+    return json.contains(key) ? json.value(key).toBool() : fallback;
 }
 
 QString jsonString(const QJsonObject &json, const QString &key, const QString &fallback)
@@ -230,6 +230,38 @@ QString SrtSourceConfig::url() const
     return u"srt://%1:%2"_s.arg(host).arg(port);
 }
 
+QJsonObject YouTubeSourceConfig::toJson() const
+{
+    return QJsonObject {
+        { u"url"_s, url.toString() },
+        { u"formatSelector"_s, formatSelector },
+        { u"extraArgs"_s, extraArgs },
+        { u"ytDlpPath"_s, ytDlpPath },
+        { u"audioBitrateKbps"_s, audioBitrateKbps },
+        { u"concurrentFragments"_s, concurrentFragments },
+        { u"directUrlMode"_s, directUrlMode },
+    };
+}
+
+YouTubeSourceConfig YouTubeSourceConfig::fromJson(const QJsonObject &json)
+{
+    YouTubeSourceConfig config;
+    config.url = QUrl(json.value(u"url"_s).toString());
+    // An empty selector is meaningful ("let yt-dlp choose"), so only a missing key keeps the
+    // built-in default.
+    if (json.contains(u"formatSelector"_s)) {
+        config.formatSelector = json.value(u"formatSelector"_s).toString();
+    }
+    config.extraArgs = json.value(u"extraArgs"_s).toString();
+    config.ytDlpPath = json.value(u"ytDlpPath"_s).toString();
+    // Opus encodes between 6 and 510 kbps; the practical range for speech/music feeds.
+    config.audioBitrateKbps = clampInt(jsonInt(json, u"audioBitrateKbps"_s, 128), 32, 510);
+    config.concurrentFragments = clampInt(jsonInt(json, u"concurrentFragments"_s, 4), 1, 16);
+    const QString mode = json.value(u"directUrlMode"_s).toString().trimmed().toLower();
+    config.directUrlMode = (mode == u"off"_s || mode == u"force"_s) ? mode : u"auto"_s;
+    return config;
+}
+
 QJsonObject SinkConfig::toJson() const
 {
     QJsonObject json {
@@ -304,6 +336,7 @@ QJsonObject StreamConfig::toJson() const
         { u"whepUrl"_s, whepUrl.toString() },
         { u"username"_s, username },
         { u"srt"_s, srt.toJson() },
+        { u"youtube"_s, youtube.toJson() },
         { u"preferredCodecs"_s, codecs },
         { u"audioEnabled"_s, audioEnabled },
         { u"reconnectInitialMs"_s, reconnectInitialMs },
@@ -330,6 +363,7 @@ StreamConfig StreamConfig::fromJson(const QJsonObject &json)
     config.whepUrl = QUrl(json.value(u"whepUrl"_s).toString());
     config.username = json.value(u"username"_s).toString();
     config.srt = SrtSourceConfig::fromJson(json.value(u"srt"_s).toObject());
+    config.youtube = YouTubeSourceConfig::fromJson(json.value(u"youtube"_s).toObject());
     config.audioEnabled = jsonBool(json, u"audioEnabled"_s, true);
     config.reconnectInitialMs = clampInt(jsonInt(json, u"reconnectInitialMs"_s, 500), 100, 60000);
     config.reconnectMaxMs =
@@ -485,7 +519,7 @@ QStringList BridgeConfig::validateStream(const StreamConfig &candidate,
         if (!candidate.whepUrl.isValid() || candidate.whepUrl.scheme().isEmpty()) {
             problems.append(u"Stream \"%1\" has no valid WHEP URL."_s.arg(label));
         }
-    } else {
+    } else if (candidate.sourceKind == SourceKind::Srt) {
         const SrtSourceConfig &srt = candidate.srt;
         if (srt.port == 0) {
             problems.append(u"Stream \"%1\": the SRT port must not be zero."_s.arg(label));
@@ -497,6 +531,11 @@ QStringList BridgeConfig::validateStream(const StreamConfig &candidate,
         // by the library before a connection is even attempted.
         if (srt.streamId.size() > 512) {
             problems.append(u"Stream \"%1\": the SRT stream ID must be at most 512 characters."_s.arg(label));
+        }
+    } else if (candidate.sourceKind == SourceKind::Youtube) {
+        const YouTubeSourceConfig &youtube = candidate.youtube;
+        if (!youtube.url.isValid() || youtube.url.scheme().isEmpty()) {
+            problems.append(u"Stream \"%1\" has no valid YouTube URL."_s.arg(label));
         }
     }
 

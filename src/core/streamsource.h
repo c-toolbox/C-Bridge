@@ -34,8 +34,20 @@ class StreamSource : public QObject
 public:
     /// data points at an Annex-B access unit (video) or an Opus packet (audio).
     /// It is only valid for the duration of the call; copy it if you need to keep it.
-    using MediaFrameCallback =
-        std::function<void(const std::uint8_t *data, std::size_t size, quint32 rtpTimestamp)>;
+    ///
+    /// Video carries two clocks on the 90 kHz grid: dtsTimestamp in decode order (what a
+    /// muxer interleaves and must keep monotonic) and ptsTimestamp in presentation order
+    /// (what a player displays). They are equal for B-frame-free streams; with B-frames —
+    /// which YouTube's HLS avc1 formats carry — they differ by the reordering depth, and
+    /// only keeping them apart lets sinks emit containers whose display timeline is
+    /// monotonic.
+    using MediaFrameCallback = std::function<void(const std::uint8_t *data, std::size_t size,
+                                                  quint32 dtsTimestamp, quint32 ptsTimestamp)>;
+
+    /// Audio has no decode/display split: one clock on the sample-rate grid (48 kHz for
+    /// Opus), so the audio callback keeps a single-timestamp shape.
+    using AudioFrameCallback = std::function<void(const std::uint8_t *data, std::size_t size,
+                                                  quint32 timestamp)>;
 
     explicit StreamSource(QObject *parent = nullptr);
     ~StreamSource() override;
@@ -45,7 +57,7 @@ public:
     virtual void setConfig(const StreamConfig &config) = 0;
 
     void setVideoCallback(MediaFrameCallback callback);
-    void setAudioCallback(MediaFrameCallback callback);
+    void setAudioCallback(AudioFrameCallback callback);
 
     /// Source credentials (WHEP username/password). A no-op for sources that carry
     /// their own authentication in the config, such as SRT passphrases.
@@ -75,6 +87,49 @@ public:
     virtual int negotiatedAudioSampleRate() const { return 48000; }
     virtual int negotiatedAudioChannels() const { return 2; }
 
+    // --- Playback control -----------------------------------------------------
+    // Optional per-source capability, following the setPassword() precedent: WHEP and SRT
+    // keep the defaults and are never asked; only sources that can actually control their
+    // media timeline (the yt-dlp VOD source) override these. The commands are user-driven
+    // and rare, so they are plain calls from the GUI thread into the source's atomics —
+    // the same thread-safety contract stop() already relies on. Position and duration are
+    // deliberately polled (via StreamStats), not signalled, to avoid per-frame signals.
+
+    /// True when this source supports pause/resume/seek (YouTube VOD). The UI shows
+    /// transport controls only when a running stream's source answers true.
+    virtual bool isPlaybackControllable() const { return false; }
+
+    /// True when the media timeline is live: seeking makes no sense and the UI hides the
+    /// seek slider. Default false (a source that never reports live is treated as VOD).
+    virtual bool isLive() const { return false; }
+
+    /// Suspend media delivery without tearing the source down. Default: no-op.
+    virtual void requestPause() {}
+
+    /// Resume delivery after requestPause(). Default: no-op.
+    virtual void requestResume() {}
+
+    /// Jump to an absolute media position in milliseconds. Default: no-op. Implementations
+    /// that cannot seek (live streams) ignore the request.
+    virtual void requestSeek(qint64 positionMs) { Q_UNUSED(positionMs); }
+
+    /// Current playback position in seconds (0 for non-controllable sources). Polled.
+    virtual double mediaPositionSeconds() const { return 0.0; }
+
+    /// Total media duration in seconds (0 when unknown or live). Polled.
+    virtual double mediaDurationSeconds() const { return 0.0; }
+
+    /// Returns true once after the source restarted its media timeline in place (a seeked
+    /// yt-dlp child generation), consuming the flag. The pipeline re-arms its keyframe gate
+    /// when it sees one, so sinks wait for the new generation's first IDR exactly as they do
+    /// after a reconnect. Default false: sources that never restart internally.
+    virtual bool takeGenerationRestartPending() { return false; }
+
+    /// One-line diagnostic of the source's last notable recovery event ("resumed at 123.4 s
+    /// after stall", "direct-url", "pipe fallback"), for the UI's stats row. Default empty:
+    /// sources without recovery behaviour have nothing to report.
+    virtual QString lastEvent() const { return {}; }
+
     StreamState state() const;
 
 Q_SIGNALS:
@@ -89,7 +144,7 @@ protected:
     void setState(StreamState state);
 
     MediaFrameCallback m_onVideo;
-    MediaFrameCallback m_onAudio;
+    AudioFrameCallback m_onAudio;
 
 private:
     std::atomic<StreamState> m_state { StreamState::Idle };

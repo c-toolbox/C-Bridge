@@ -20,7 +20,13 @@ struct MediaUnit {
     enum class Kind { Video, Audio };
 
     Kind kind = Kind::Video;
-    std::uint32_t rtpTimestamp = 0;
+    /// Decode-order clock (90 kHz for video, the sample rate for audio). Muxers interleave
+    /// on this and reject non-monotonic values.
+    std::uint32_t dtsTimestamp = 0;
+    /// Presentation-order clock: what a player displays. Equal to dtsTimestamp for audio and
+    /// B-frame-free video; with B-frames it runs backwards by the reordering depth in decode
+    /// order, which is exactly what a playable container needs.
+    std::uint32_t ptsTimestamp = 0;
     bool isKeyframe = false;
     std::vector<std::uint8_t> payload;
 };

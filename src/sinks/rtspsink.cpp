@@ -222,10 +222,12 @@ void RtspSink::close()
         m_clients.clear();
     }
 
-    m_videoLastRaw = -1;
+    m_videoLastRawDts = -1;
     m_audioLastRaw = -1;
-    m_videoOffset = 0;
+    m_videoOffsetDts = 0;
     m_audioOffset = 0;
+    m_videoLastRawPts = -1;
+    m_videoOffsetPts = 0;
 }
 
 void RtspSink::addClient(const QString &sessionId, const QHostAddress &destination, int rtpPort)
@@ -420,7 +422,7 @@ bool RtspSink::ensureContext(Client *client)
 }
 
 bool RtspSink::writeToClient(Client *client, AVStream *stream, const std::uint8_t *data,
-                             std::size_t size, qint64 pts, bool isKeyframe)
+                             std::size_t size, qint64 pts, qint64 dts, bool isKeyframe)
 {
     av_packet_unref(client->packet);
 
@@ -430,8 +432,10 @@ bool RtspSink::writeToClient(Client *client, AVStream *stream, const std::uint8_
     std::memcpy(client->packet->data, data, size);
 
     client->packet->stream_index = stream->index;
+    // The per-client rtp_mpegts muxer stamps the wire with pkt->pts (presentation time) while
+    // its interleave check wants a monotonic DTS — keep both apart for B-frame streams.
     client->packet->pts = pts;
-    client->packet->dts = pts;
+    client->packet->dts = dts;
     client->packet->duration = 0;
     if (isKeyframe) {
         client->packet->flags |= AV_PKT_FLAG_KEY;
@@ -469,7 +473,7 @@ qint64 RtspSink::unwrap(std::uint32_t rtpTimestamp, qint64 &lastRaw, qint64 &off
 }
 
 bool RtspSink::writeVideo(const std::uint8_t *data, std::size_t size,
-                          std::uint32_t rtpTimestamp, bool isKeyframe)
+                          std::uint32_t dtsTimestamp, std::uint32_t ptsTimestamp, bool isKeyframe)
 {
     if (!m_open || size == 0) {
         return false;
@@ -477,7 +481,8 @@ bool RtspSink::writeVideo(const std::uint8_t *data, std::size_t size,
 
     reapDeadClients();
 
-    const qint64 absolute = unwrap(rtpTimestamp, m_videoLastRaw, m_videoOffset);
+    const qint64 dtsAbsolute = unwrap(dtsTimestamp, m_videoLastRawDts, m_videoOffsetDts);
+    const qint64 ptsAbsolute = unwrap(ptsTimestamp, m_videoLastRawPts, m_videoOffsetPts);
 
     std::vector<Client *> targets;
     {
@@ -502,12 +507,15 @@ bool RtspSink::writeVideo(const std::uint8_t *data, std::size_t size,
             continue;
         }
         if (!client->started) {
-            client->ptsBase = absolute;
+            client->ptsBase = dtsAbsolute;
             client->started = true;
         }
 
-        const qint64 pts = absolute - client->ptsBase;
-        if (writeToClient(client, client->videoStream, data, size, pts, isKeyframe)) {
+        // DTS stays monotonic for the interleave check; PTS rides on the same per-client
+        // rebase so a B-frame's presentation offset survives to the wire.
+        const qint64 outDts = dtsAbsolute - client->ptsBase;
+        const qint64 outPts = outDts + (ptsAbsolute - dtsAbsolute);
+        if (writeToClient(client, client->videoStream, data, size, outPts, outDts, isKeyframe)) {
             anyWritten = true;
         } else {
             setDead(client); // the socket failed: the player went away
@@ -549,7 +557,8 @@ bool RtspSink::writeAudio(const std::uint8_t *data, std::size_t size,
     bool anyWritten = false;
     for (Client *client : targets) {
         const qint64 pts = av_rescale(videoDomain - client->ptsBase, audioClock, kRtpVideoClock);
-        if (writeToClient(client, client->audioStream, data, size, pts, true)) {
+        // Audio has no decode/display split: one value serves both fields.
+        if (writeToClient(client, client->audioStream, data, size, pts, pts, true)) {
             anyWritten = true;
         } else {
             setDead(client);

@@ -53,7 +53,8 @@ public:
     bool isOpen() const override { return m_open; }
 
     bool writeVideo(const std::uint8_t *data, std::size_t size,
-                    std::uint32_t rtpTimestamp, bool isKeyframe) override;
+                    std::uint32_t dtsTimestamp, std::uint32_t ptsTimestamp,
+                    bool isKeyframe) override;
     bool writeAudio(const std::uint8_t *data, std::size_t size,
                     std::uint32_t rtpTimestamp) override;
 
@@ -96,7 +97,7 @@ private:
     bool ensureContext(Client *client);
     static void closeClientContext(Client *client);
     bool writeToClient(Client *client, AVStream *stream, const std::uint8_t *data,
-                       std::size_t size, qint64 pts, bool isKeyframe);
+                       std::size_t size, qint64 pts, qint64 dts, bool isKeyframe);
 
     /// Converts a wrapping 32-bit RTP timestamp into a monotonic 64-bit PTS.
     static qint64 unwrap(std::uint32_t rtpTimestamp, qint64 &lastRaw, qint64 &offset);
@@ -122,8 +123,12 @@ private:
 
     bool m_open = false;
 
-    qint64 m_videoLastRaw = -1;
-    qint64 m_videoOffset = 0;
+    /// Video unwrap state, one pair per clock: DTS and PTS wrap independently on the same
+    /// 90 kHz grid (see TsMulticastSink for the rationale).
+    qint64 m_videoLastRawDts = -1;
+    qint64 m_videoOffsetDts = 0;
+    qint64 m_videoLastRawPts = -1;
+    qint64 m_videoOffsetPts = 0;
     qint64 m_audioLastRaw = -1;
     qint64 m_audioOffset = 0;
 

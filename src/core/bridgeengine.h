@@ -19,6 +19,7 @@ class QTimer;
 namespace CBridge {
 
 class StreamPipeline;
+class StreamPreview;
 
 /// Owns every running pipeline and exposes aggregate state to the UI.
 class BridgeEngine : public QObject
@@ -49,6 +50,17 @@ public:
     QList<SinkStats> sinkStatsFor(const QString &streamId) const;
     double aggregateInputMbps() const;
     double aggregateOutputMbps() const;
+
+    /// The built-in viewer of a running stream, or nullptr when the stream is not running.
+    /// The viewer window binds to it and attaches via StreamPreview::setActive().
+    StreamPreview *previewFor(const QString &streamId) const;
+
+    // --- Playback control (forwarded to the running pipeline's source) ------------------
+    bool isPlaybackControllable(const QString &streamId) const;
+    bool isLive(const QString &streamId) const;
+    void requestPause(const QString &streamId);
+    void requestResume(const QString &streamId);
+    void requestSeek(const QString &streamId, qint64 positionMs);
 
 Q_SIGNALS:
     void streamStateChanged(const QString &streamId, CBridge::StreamState state);

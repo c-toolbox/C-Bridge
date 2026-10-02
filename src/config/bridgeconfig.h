@@ -128,6 +128,47 @@ struct SrtSourceConfig {
     QString url() const;
 };
 
+/// YouTube ingest via a yt-dlp child process (see YTDLP_SOURCE_PLAN.md). The video passes
+/// through as Annex-B from an HLS (MPEG-TS) format; the AAC audio is transcoded to Opus
+/// 48 kHz stereo inside the source, so every sink sees the same passthrough contract as
+/// WHEP and SRT.
+struct YouTubeSourceConfig {
+    QUrl url;
+
+    /// yt-dlp format selector. The default picks an HLS stream with H.264 video: TS is
+    /// stream-by-design on an unseekable pipe, while progressive MP4 keeps its moov atom at
+    /// the end of the file and cannot be demuxed from a pipe. Empty lets yt-dlp choose.
+    QString formatSelector = QStringLiteral("best[ext=m3u8][vcodec~='^avc1']");
+
+    /// Extra yt-dlp arguments appended verbatim (split on spaces), e.g. cookies or a JS
+    /// runtime: "--cookies-from-browser chrome".
+    QString extraArgs;
+
+    /// Explicit path to yt-dlp.exe for this stream. Empty falls back to the app-wide
+    /// Settings value, then PATH, then D:/FFmpeg/yt-dlp.exe.
+    QString ytDlpPath;
+
+    /// Bitrate of the AAC→Opus transcode inside the source (YouTube audio is always
+    /// converted to Opus 48 kHz stereo before it reaches the pipeline).
+    int audioBitrateKbps = 128;
+
+    /// Parallel HLS fragment fetches in yt-dlp (1 = strictly sequential, the original
+    /// behaviour). yt-dlp writes fragments to stdout in index order, so the pipe stays
+    /// one ordered stream while the network fetch runs ahead of the consumer.
+    int concurrentFragments = 4;
+
+    /// "auto": when the metadata probe finds a muxed H.264+AAC HLS format, skip the
+    /// yt-dlp stdout pipe entirely and let FFmpeg's HLS reader fetch the resolved direct
+    /// URL (reconnects internally, seeks instantly). "off": always pipe through yt-dlp.
+    /// "force": prefer the direct path and warn when the probe found no muxed format.
+    /// A direct-path failure always falls back to the pipe, so this is an optimisation,
+    /// never a new single point of failure.
+    QString directUrlMode = QStringLiteral("auto");
+
+    QJsonObject toJson() const;
+    static YouTubeSourceConfig fromJson(const QJsonObject &json);
+};
+
 struct SinkConfig {
     SinkKind kind = SinkKind::TsMulticast;
     bool enabled = true;
@@ -151,6 +192,7 @@ struct StreamConfig {
     QUrl whepUrl;
     QString username;
     SrtSourceConfig srt;
+    YouTubeSourceConfig youtube;
 
     /// Order matters: the first entry is offered with the highest priority.
     QList<VideoCodec> preferredCodecs { VideoCodec::H264, VideoCodec::H265 };

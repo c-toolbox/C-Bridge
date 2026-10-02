@@ -77,9 +77,55 @@ Kirigami.ApplicationWindow {
         StreamEditorPage {}
     }
 
+    Component {
+        id: previewWindow
+        PreviewWindow { controller: root.bridgeController }
+    }
+
     function openEditor(streamId) {
         controller.beginEditStream(streamId)
         pageStack.push(editorPage)
+    }
+
+    /// mm:ss (h:mm:ss past an hour) for the transport labels.
+    function formatTime(seconds) {
+        if (!seconds || seconds <= 0)
+            return "0:00"
+        const total = Math.floor(seconds)
+        const h = Math.floor(total / 3600)
+        const m = Math.floor((total % 3600) / 60)
+        const s = total % 60
+        const mm = h > 0 ? String(m).padStart(2, "0") : String(m)
+        return (h > 0 ? h + ":" : "") + mm + ":" + String(s).padStart(2, "0")
+    }
+
+    /// Opens (or reuses) the built-in viewer for a stream. One window per stream, kept in a
+    /// map on the window so re-clicking Preview raises the existing viewer instead of stacking
+    /// another copy. The window detaches itself when the stream stops.
+    property var previewWindows: ({})
+
+    function openPreview(streamId, streamName) {
+        let win = root.previewWindows[streamId]
+        if (win) {
+            win.streamName = streamName
+            win.show()
+            win.raise()
+            win.requestActivate()
+            return
+        }
+        win = previewWindow.createObject(root)
+        if (!win)
+            return
+        win.streamId = streamId
+        win.streamName = streamName
+        // Window has no "closed" signal; "closing" (with the CloseEvent) is the one that
+        // fires as the window goes away. Connecting a non-existent signal would throw and
+        // abort this function before show() below ever ran.
+        win.closing.connect(function () {
+            delete root.previewWindows[streamId]
+        })
+        root.previewWindows[streamId] = win
+        win.show()
     }
 
     pageStack.initialPage: Kirigami.ScrollablePage {
@@ -147,7 +193,8 @@ Kirigami.ApplicationWindow {
                             switch (model.state) {
                             case "Running": return Kirigami.Theme.positiveTextColor
                             case "Connecting":
-                            case "Retrying": return Kirigami.Theme.neutralTextColor
+                            case "Retrying":
+                            case "Paused": return Kirigami.Theme.neutralTextColor
                             case "Failed": return Kirigami.Theme.negativeTextColor
                             default: return Kirigami.Theme.disabledTextColor
                             }
@@ -202,6 +249,76 @@ Kirigami.ApplicationWindow {
                             color: Kirigami.Theme.negativeTextColor
                             text: model.lastError
                         }
+
+                        // The source's last recovery event (stall resume, direct-url switch,
+                        // pipe fallback) — diagnostic context that must not be confused with
+                        // the red error line above.
+                        Controls.Label {
+                            visible: model.lastEvent !== undefined && model.lastEvent !== ""
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            opacity: 0.6
+                            text: model.lastEvent
+                        }
+
+                        // YouTube VOD transport: pause/resume and a seek slider. Shown only
+                        // when the running source reports it can control its timeline; live
+                        // streams hide the slider (no seekable duration). Seek commits on
+                        // release because each seek respawns the yt-dlp child.
+                        RowLayout {
+                            id: transportRow
+                            Layout.fillWidth: true
+                            visible: model.playbackControllable === true
+                            spacing: Kirigami.Units.smallSpacing
+
+                            readonly property real duration: model.durationSeconds
+                            readonly property real position: model.positionSeconds
+
+                            // The playhead is pushed rather than bound to the slider: a drag
+                            // would destroy the binding permanently, and the delegate lives on.
+                            onPositionChanged:
+                                if (!cardSeekSlider.pressed)
+                                    cardSeekSlider.value = position
+
+                            Controls.Button {
+                                icon.name: model.state === "Paused"
+                                    ? "media-playback-start" : "media-playback-pause"
+                                Controls.ToolTip.text: model.state === "Paused"
+                                    ? qsTr("Resume") : qsTr("Pause")
+                                Controls.ToolTip.visible: hovered
+                                onClicked: {
+                                    if (model.state === "Paused")
+                                        controller.resumeStream(model.streamId)
+                                    else
+                                        controller.pauseStream(model.streamId)
+                                }
+                            }
+
+                            Controls.Label {
+                                text: root.formatTime(transportRow.position)
+                                opacity: 0.7
+                            }
+
+                            Controls.Slider {
+                                id: cardSeekSlider
+                                Layout.fillWidth: true
+                                visible: !model.live && transportRow.duration > 0
+                                from: 0
+                                to: Math.max(transportRow.duration, 1)
+                                enabled: !model.live
+                                onPressedChanged: {
+                                    if (!pressed)
+                                        controller.seekStream(model.streamId, value)
+                                }
+                            }
+
+                            Controls.Label {
+                                text: model.live ? qsTr("LIVE") : root.formatTime(transportRow.duration)
+                                opacity: model.live ? 1.0 : 0.7
+                                color: model.live ? Kirigami.Theme.negativeTextColor
+                                                   : Kirigami.Theme.textColor
+                            }
+                        }
                     }
 
                     GridLayout {
@@ -228,6 +345,13 @@ Kirigami.ApplicationWindow {
                             else
                                 controller.stopStream(model.streamId)
                         }
+                    }
+
+                    Controls.Button {
+                        icon.name: "view-preview"
+                        Controls.ToolTip.text: qsTr("Preview this stream")
+                        Controls.ToolTip.visible: hovered
+                        onClicked: root.openPreview(model.streamId, model.name)
                     }
 
                     Controls.Button {

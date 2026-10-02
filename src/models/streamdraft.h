@@ -33,6 +33,12 @@ class StreamDraft : public QObject
     Q_PROPERTY(QString srtPassphrase READ srtPassphrase WRITE setSrtPassphrase NOTIFY srtPassphraseChanged)
     Q_PROPERTY(int srtLatencyMs READ srtLatencyMs WRITE setSrtLatencyMs NOTIFY srtLatencyMsChanged)
     Q_PROPERTY(QString srtStreamId READ srtStreamId WRITE setSrtStreamId NOTIFY srtStreamIdChanged)
+    Q_PROPERTY(QString youtubeUrl READ youtubeUrl WRITE setYoutubeUrl NOTIFY youtubeUrlChanged)
+    Q_PROPERTY(QString formatSelector READ formatSelector WRITE setFormatSelector NOTIFY formatSelectorChanged)
+    Q_PROPERTY(QString extraArgs READ extraArgs WRITE setExtraArgs NOTIFY extraArgsChanged)
+    Q_PROPERTY(int audioBitrateKbps READ audioBitrateKbps WRITE setAudioBitrateKbps NOTIFY audioBitrateKbpsChanged)
+    Q_PROPERTY(int concurrentFragments READ concurrentFragments WRITE setConcurrentFragments NOTIFY concurrentFragmentsChanged)
+    Q_PROPERTY(QString directUrlMode READ directUrlMode WRITE setDirectUrlMode NOTIFY directUrlModeChanged)
     Q_PROPERTY(bool audioEnabled READ isAudioEnabled WRITE setAudioEnabled NOTIFY audioEnabledChanged)
     Q_PROPERTY(QStringList preferredCodecs READ preferredCodecs WRITE setPreferredCodecs NOTIFY preferredCodecsChanged)
     Q_PROPERTY(int reconnectInitialMs READ reconnectInitialMs WRITE setReconnectInitialMs NOTIFY reconnectInitialMsChanged)
@@ -54,6 +60,12 @@ public:
     QString srtPassphrase() const { return m_config.srt.passphrase; }
     int srtLatencyMs() const { return m_config.srt.latencyMs; }
     QString srtStreamId() const { return m_config.srt.streamId; }
+    QString youtubeUrl() const { return m_config.youtube.url.toString(); }
+    QString formatSelector() const { return m_config.youtube.formatSelector; }
+    QString extraArgs() const { return m_config.youtube.extraArgs; }
+    int audioBitrateKbps() const { return m_config.youtube.audioBitrateKbps; }
+    int concurrentFragments() const { return m_config.youtube.concurrentFragments; }
+    QString directUrlMode() const { return m_config.youtube.directUrlMode; }
     bool isAudioEnabled() const { return m_config.audioEnabled; }
     QStringList preferredCodecs() const;
     int reconnectInitialMs() const { return m_config.reconnectInitialMs; }
@@ -71,6 +83,12 @@ public:
     void setSrtPassphrase(const QString &passphrase);
     void setSrtLatencyMs(int ms);
     void setSrtStreamId(const QString &streamId);
+    void setYoutubeUrl(const QString &url);
+    void setFormatSelector(const QString &selector);
+    void setExtraArgs(const QString &args);
+    void setAudioBitrateKbps(int kbps);
+    void setConcurrentFragments(int fragments);
+    void setDirectUrlMode(const QString &mode);
     void setAudioEnabled(bool enabled);
     void setPreferredCodecs(const QStringList &codecs);
     void setReconnectInitialMs(int ms);
@@ -91,6 +109,12 @@ Q_SIGNALS:
     void srtPassphraseChanged();
     void srtLatencyMsChanged();
     void srtStreamIdChanged();
+    void youtubeUrlChanged();
+    void formatSelectorChanged();
+    void extraArgsChanged();
+    void audioBitrateKbpsChanged();
+    void concurrentFragmentsChanged();
+    void directUrlModeChanged();
     void audioEnabledChanged();
     void preferredCodecsChanged();
     void reconnectInitialMsChanged();

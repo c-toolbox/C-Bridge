@@ -31,6 +31,9 @@ qt_add_executable(${TARGET_NAME}
   core/streamsource.cpp
   core/streamsource.h
 
+  preview/streampreview.cpp
+  preview/streampreview.h
+
   media/bitstreaminspector.cpp
   media/bitstreaminspector.h
   media/avwrappers.h
@@ -77,6 +80,11 @@ qt_add_executable(${TARGET_NAME}
   srt/srtsource.cpp
   srt/srtsource.h
 
+  ytdlp/ytdlpsource.cpp
+  ytdlp/ytdlpsource.h
+  ytdlp/audiotranscoder.cpp
+  ytdlp/audiotranscoder.h
+
   # Application icons, same as C-Slice: the qrc embeds the window icon into the
   # exe (auto-registered at startup by Qt 6), and icon.rc sets the Windows file
   # / taskbar icon.
@@ -101,6 +109,7 @@ qt_add_qml_module(${TARGET_NAME}
     StreamEditorPage.qml
     MediaMTXDialog.qml
     SinkCard.qml
+    PreviewWindow.qml
     TsSinkForm.qml
     RtpSinkForm.qml
     RtspSinkForm.qml
@@ -130,9 +139,16 @@ target_include_directories(${TARGET_NAME} PRIVATE
 # pinned tree we link against, silently mismatching headers and import libs.
 target_include_directories(${TARGET_NAME} BEFORE PRIVATE "${FFMPEG_INCLUDE_DIRS}")
 
+# yt-dlp needs an ffmpeg binary for remuxing/transcoding; point it at the same FFmpeg
+# build we stage next to the executable (YtdlpSource checks existence before use).
+if(FFMPEG_RUNTIME_DIR)
+  target_compile_definitions(${TARGET_NAME} PRIVATE "CBRIDGE_FFMPEG_BIN_DIR=\"${FFMPEG_RUNTIME_DIR}\"")
+endif()
+
 target_link_libraries(${TARGET_NAME} PRIVATE
   Qt6::Core
   Qt6::Gui
+  Qt6::Multimedia
   Qt6::Network
   Qt6::Qml
   Qt6::Quick
@@ -499,6 +515,56 @@ if(WIN32 AND FFMPEG_RUNTIME_DIR)
   endif()
 endif()
 
+# --- TS multicast smoke test ----------------------------------------------------
+# Regression check for B-frame timestamp handling in the TS sink: feeds a real B-frame
+# MPEG-TS fixture through TsMulticastSink over loopback, captures the emitted datagrams
+# and verifies DTS stays monotonic in decode order while PTS keeps its presentation values.
+qt_add_executable(ts-smoke-test
+  tests/ts_smoke_test.cpp
+  sinks/tsmulticastsink.cpp
+  config/bridgeconfig.cpp
+  core/bridgetypes.cpp
+)
+target_include_directories(ts-smoke-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# qt_add_executable defaults to the Windows GUI subsystem; this test prints to a console.
+set_target_properties(ts-smoke-test PROPERTIES WIN32_EXECUTABLE OFF)
+# Same as the main target: keep Craft's FFmpeg headers from shadowing the pinned tree.
+target_include_directories(ts-smoke-test BEFORE PRIVATE "${FFMPEG_INCLUDE_DIRS}")
+target_link_libraries(ts-smoke-test PRIVATE
+  Qt6::Core
+  Qt6::Network
+  FFmpeg::AVCODEC
+  FFmpeg::AVFORMAT
+  FFmpeg::AVUTIL
+)
+
+if(MSVC)
+  target_compile_options(ts-smoke-test PRIVATE
+    /permissive-
+    /Zc:__cplusplus
+    /wd4244
+    /wd4267
+  )
+  target_compile_definitions(ts-smoke-test PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS
+  )
+endif()
+
+if(WIN32 AND FFMPEG_RUNTIME_DIR)
+  file(GLOB CBRIDGE_TS_SMOKE_FFMPEG_DLLS "${FFMPEG_RUNTIME_DIR}/*.dll")
+  if(CBRIDGE_TS_SMOKE_FFMPEG_DLLS)
+    add_custom_command(TARGET ts-smoke-test POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CBRIDGE_TS_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:ts-smoke-test>"
+      COMMAND_EXPAND_LISTS
+      VERBATIM
+    )
+  endif()
+endif()
+
+
 # --- SRT smoke test -------------------------------------------------------------
 # Regression check that an empty-host listener binds and waits for a peer (the old srt://:<port>
 # URL resolved to the IPv6 wildcard this FFmpeg/SRT build refuses with SRT_EINVOP), then a full
@@ -545,6 +611,63 @@ if(WIN32 AND FFMPEG_RUNTIME_DIR)
     add_custom_command(TARGET srt-smoke-test POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CBRIDGE_SRT_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:srt-smoke-test>"
+      COMMAND_EXPAND_LISTS
+      VERBATIM
+    )
+  endif()
+endif()
+
+# --- Preview smoke test ---------------------------------------------------------
+# Offline check for the built-in viewer's decode path: demuxes the MPEG-TS fixture the
+# yt-dlp smoke uses and drives the production StreamPreview exactly like the pipeline
+# worker does, verifying frames reach the attached QVideoSink and audio fills the ring.
+qt_add_executable(preview-smoke-test
+  tests/preview_smoke_test.cpp
+  preview/streampreview.cpp
+  core/bridgetypes.cpp
+  media/audiodecoder.cpp
+  media/opuspayloadsanitizer.cpp
+  media/videodecoder.cpp
+  media/videofilter.cpp
+  media/cudacontext.cpp
+)
+target_include_directories(preview-smoke-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# qt_add_executable defaults to the Windows GUI subsystem; this test prints to a console.
+set_target_properties(preview-smoke-test PROPERTIES WIN32_EXECUTABLE OFF)
+# Same as the main target: keep Craft's FFmpeg headers from shadowing the pinned tree.
+target_include_directories(preview-smoke-test BEFORE PRIVATE "${FFMPEG_INCLUDE_DIRS}")
+target_link_libraries(preview-smoke-test PRIVATE
+  Qt6::Core
+  Qt6::Gui
+  Qt6::Multimedia
+  FFmpeg::AVCODEC
+  FFmpeg::AVFILTER
+  FFmpeg::AVFORMAT
+  FFmpeg::AVUTIL
+  FFmpeg::SWRESAMPLE
+  FFmpeg::SWSCALE
+)
+
+if(MSVC)
+  target_compile_options(preview-smoke-test PRIVATE
+    /permissive-
+    /Zc:__cplusplus
+    /wd4244
+    /wd4267
+  )
+  target_compile_definitions(preview-smoke-test PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS
+  )
+endif()
+
+if(WIN32 AND FFMPEG_RUNTIME_DIR)
+  file(GLOB CBRIDGE_PREVIEW_SMOKE_FFMPEG_DLLS "${FFMPEG_RUNTIME_DIR}/*.dll")
+  if(CBRIDGE_PREVIEW_SMOKE_FFMPEG_DLLS)
+    add_custom_command(TARGET preview-smoke-test POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CBRIDGE_PREVIEW_SMOKE_FFMPEG_DLLS} "$<TARGET_FILE_DIR:preview-smoke-test>"
       COMMAND_EXPAND_LISTS
       VERBATIM
     )
