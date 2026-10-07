@@ -128,6 +128,7 @@ Q_SIGNALS:
 
 private:
     friend class PreviewAudioDevice;
+    friend struct PreviewFrameTestAccess;
 
     void onDecodedVideo(AVFrame *frame);
     void onFilteredVideo(AVFrame *frame);

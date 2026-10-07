@@ -84,6 +84,8 @@ qt_add_executable(${TARGET_NAME}
   ytdlp/ytdlpsource.h
   ytdlp/audiotranscoder.cpp
   ytdlp/audiotranscoder.h
+  ytdlp/compatibleformats.h
+  ytdlp/ffmpegstreamoptions.h
 
   # Application icons, same as C-Slice: the qrc embeds the window icon into the
   # exe (auto-registered at startup by Qt 6), and icon.rc sets the Windows file
@@ -326,6 +328,55 @@ if(WIN32 AND CBRIDGE_DEPLOY_BUILD_TREE)
 endif()
 
 # --- Audio smoke test ---------------------------------------------------------
+add_executable(youtube-formats-test EXCLUDE_FROM_ALL
+  tests/youtube_formats_test.cpp models/streamdraft.cpp models/sinklistmodel.cpp
+  config/bridgeconfig.cpp core/bridgetypes.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/cbridgesettings.cpp")
+target_include_directories(youtube-formats-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+set_target_properties(youtube-formats-test PROPERTIES WIN32_EXECUTABLE FALSE)
+target_link_libraries(youtube-formats-test PRIVATE Qt6::Core Qt6::Gui Qt6::Network KF6::ConfigCore KF6::ConfigGui)
+add_test(NAME youtube-formats COMMAND youtube-formats-test)
+
+add_executable(youtube-merge-playback-test EXCLUDE_FROM_ALL
+  tests/youtube_merge_playback_test.cpp config/bridgeconfig.cpp core/bridgetypes.cpp
+  core/streamsource.cpp ytdlp/ytdlpsource.cpp ytdlp/audiotranscoder.cpp
+  media/bitstreaminspector.cpp media/cudacontext.cpp "${CMAKE_CURRENT_BINARY_DIR}/cbridgesettings.cpp")
+target_include_directories(youtube-merge-playback-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(youtube-merge-playback-test BEFORE PRIVATE "${FFMPEG_INCLUDE_DIRS}")
+set_target_properties(youtube-merge-playback-test PROPERTIES WIN32_EXECUTABLE FALSE)
+add_test(NAME youtube-merge-eof COMMAND youtube-merge-playback-test --eof-test)
+target_link_libraries(youtube-merge-playback-test PRIVATE Qt6::Core Qt6::Gui Qt6::Network
+  KF6::ConfigCore KF6::ConfigGui FFmpeg::AVCODEC FFmpeg::AVFORMAT FFmpeg::AVUTIL FFmpeg::SWRESAMPLE)
+if(FFMPEG_RUNTIME_DIR)
+  target_compile_definitions(youtube-merge-playback-test PRIVATE "CBRIDGE_FFMPEG_BIN_DIR=\"${FFMPEG_RUNTIME_DIR}\"")
+endif()
+if(MSVC)
+  target_compile_definitions(youtube-merge-playback-test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+endif()
+
+add_executable(playback-clock-test tests/playback_clock_test.cpp)
+target_include_directories(playback-clock-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+set_target_properties(playback-clock-test PROPERTIES WIN32_EXECUTABLE FALSE)
+
+add_executable(startup-sources-smoke-test EXCLUDE_FROM_ALL
+  tests/startup_sources_smoke_test.cpp config/bridgeconfig.cpp core/streamsource.cpp core/bridgetypes.cpp core/bridgetypes.h
+  srt/srtsource.cpp ytdlp/ytdlpsource.cpp ytdlp/audiotranscoder.cpp
+  preview/streampreview.cpp media/videodecoder.cpp media/videofilter.cpp
+  media/cudacontext.cpp media/audiodecoder.cpp media/bitstreaminspector.cpp
+  media/opuspayloadsanitizer.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/cbridgesettings.cpp")
+target_include_directories(startup-sources-smoke-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+set_target_properties(startup-sources-smoke-test PROPERTIES WIN32_EXECUTABLE FALSE)
+target_link_libraries(startup-sources-smoke-test PRIVATE Qt6::Core Qt6::Gui Qt6::Multimedia
+  Qt6::Network KF6::ConfigCore KF6::ConfigGui FFmpeg::AVCODEC FFmpeg::AVFORMAT
+  FFmpeg::AVFILTER FFmpeg::AVUTIL FFmpeg::SWRESAMPLE FFmpeg::SWSCALE)
+if(FFMPEG_RUNTIME_DIR)
+  target_compile_definitions(startup-sources-smoke-test PRIVATE "CBRIDGE_FFMPEG_BIN_DIR=\"${FFMPEG_RUNTIME_DIR}\"")
+endif()
+if(MSVC)
+  target_compile_definitions(startup-sources-smoke-test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+endif()
+
 # Standalone round-trip check for the Opus path used by both sinks: encode a known tone,
 # decode it with the production AudioDecoder and verify the waveform, then mux the same
 # packets into an MPEG-TS file exactly like TsMulticastSink does and decode that back.

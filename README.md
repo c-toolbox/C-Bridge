@@ -77,6 +77,24 @@ Configurations are JSON documents listing streams and their sinks; the shipped
 `data/configs/example.cbridge.json` is an empty template to start from. Application
 preferences (last config, auto-load) use `QSettings`.
 
+For YouTube sources, paste a video URL in the stream editor. C-Bridge queries yt-dlp
+in the background and offers resolutions/frame rates/codecs and independent audio
+tracks (including language and source bitrate), plus bundled audio where available.
+Choose a resolution, then a source audio option; the `video+audio` format IDs are
+saved with the stream and used on subsequent starts. Turn off
+**Receive audio** for silent output. **Output Opus bitrate** controls the audio
+transcode, independently of the source's audio bitrate. FFmpeg fetches the separate
+inputs and merges them directly into the streaming MPEG-TS pipe, without downloading
+the whole video first. H.264/H.265 pass through; VP9/AV1 convert to H.264 at the selected
+resolution. HDR converts to SDR. Conversion uses NVIDIA NVENC when an actual encoder
+check succeeds, with software encoding as the fallback; software conversion of 4K
+video may be slower than realtime. FFmpeg needs libopus/libx264 and zscale/tonemap
+for HDR conversion (included in the pinned build). Use **Refresh** after changing
+authentication arguments or to retry a failed format query.
+Merged-stream seeks fetch forward to the requested point to avoid stalled HTTP
+range requests; copied video starts at a keyframe, and converted video decodes
+forward. Distant seeks can take longer than seeks in bundled HLS.
+
 Receive a multicast sink with mpv — the low-latency flags matter, since an untuned
 receiver buffers enough to erase the latency advantage:
 

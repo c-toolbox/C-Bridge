@@ -174,11 +174,65 @@ Kirigami.ScrollablePage {
                 onTextEdited: controller.draft.youtubeUrl = text
             }
 
+            RowLayout {
+                visible: controller.draft.sourceKind === "youtube"
+                Controls.BusyIndicator {
+                    running: controller.draft.youtubeFormatsBusy
+                    visible: running
+                    implicitWidth: Kirigami.Units.gridUnit * 2
+                    implicitHeight: implicitWidth
+                }
+                Controls.Label {
+                    text: controller.draft.youtubeFormatsBusy ? qsTr("Checking available formats…") : qsTr("Available formats")
+                }
+                Controls.Button {
+                    text: qsTr("Refresh")
+                    enabled: !controller.draft.youtubeFormatsBusy && controller.draft.youtubeUrl !== ""
+                    onClicked: controller.draft.refreshYoutubeFormats()
+                }
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: controller.draft.sourceKind === "youtube" && controller.draft.youtubeFormatsError !== ""
+                text: controller.draft.youtubeFormatsError
+                color: Kirigami.Theme.negativeTextColor
+                wrapMode: Text.WordWrap
+            }
+
+            Controls.ComboBox {
+                Kirigami.FormData.label: qsTr("Resolution:")
+                visible: controller.draft.sourceKind === "youtube"
+                enabled: !controller.draft.youtubeFormatsBusy && count > 0
+                model: controller.draft.youtubeResolutions
+                currentIndex: controller.draft.youtubeResolutionIndex
+                displayText: currentIndex < 0 ? qsTr("Choose a resolution (currently automatic/custom)") : currentText
+                onActivated: controller.draft.selectYoutubeResolution(currentIndex)
+            }
+
+            Controls.ComboBox {
+                Kirigami.FormData.label: qsTr("Source audio:")
+                visible: controller.draft.sourceKind === "youtube"
+                enabled: !controller.draft.youtubeFormatsBusy && count > 0
+                model: controller.draft.youtubeAudioOptions
+                textRole: "audio"
+                currentIndex: controller.draft.youtubeAudioIndex
+                displayText: currentIndex < 0 ? qsTr("Choose a resolution first") : currentText
+                onActivated: controller.draft.selectYoutubeAudio(currentIndex)
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: controller.draft.sourceKind === "youtube"
+                wrapMode: Text.WordWrap
+                text: qsTr("Choose video resolution/codec and an independent audio track, or bundled audio. VP9/AV1 converts to H.264 at the selected resolution; HDR converts to SDR. Audio converts to stereo Opus at the output bitrate below.")
+            }
+
             Controls.TextField {
-                Kirigami.FormData.label: qsTr("Format selector:")
+                Kirigami.FormData.label: qsTr("Format selector (advanced):")
                 visible: controller.draft.sourceKind === "youtube"
                 enabled: visible
-                placeholderText: qsTr("Empty for yt-dlp's default selection")
+                placeholderText: qsTr("Choose a resolution above, or enter a selector")
                 text: controller.draft.formatSelector
                 onTextEdited: controller.draft.formatSelector = text
             }
@@ -193,7 +247,7 @@ Kirigami.ScrollablePage {
             }
 
             Controls.SpinBox {
-                Kirigami.FormData.label: qsTr("Audio bitrate (kbps):")
+                Kirigami.FormData.label: qsTr("Output Opus bitrate (kbps):")
                 visible: controller.draft.sourceKind === "youtube" && controller.draft.audioEnabled
                 enabled: visible
                 from: 32
@@ -222,7 +276,7 @@ Kirigami.ScrollablePage {
                 model: ["auto", "off", "force"]
                 currentIndex: ["auto", "off", "force"].indexOf(controller.draft.directUrlMode)
                 onActivated: controller.draft.directUrlMode = model[currentIndex]
-                Controls.ToolTip.text: qsTr("auto: fetch a muxed H.264+AAC HLS stream directly with FFmpeg (no yt-dlp pipe, instant seek), falling back to the yt-dlp pipe. off: always pipe. force: prefer direct and warn when unavailable.")
+                Controls.ToolTip.text: qsTr("auto: use the direct reader for compatible bundled HLS streams. Separate tracks and formats needing conversion use FFmpeg through yt-dlp. off: always pipe. force: prefer direct when compatible.")
                 Controls.ToolTip.visible: hovered
             }
 

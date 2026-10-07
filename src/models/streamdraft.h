@@ -13,6 +13,9 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
+#include <QProcess>
+#include <QTimer>
 
 namespace CBridge {
 
@@ -39,6 +42,12 @@ class StreamDraft : public QObject
     Q_PROPERTY(int audioBitrateKbps READ audioBitrateKbps WRITE setAudioBitrateKbps NOTIFY audioBitrateKbpsChanged)
     Q_PROPERTY(int concurrentFragments READ concurrentFragments WRITE setConcurrentFragments NOTIFY concurrentFragmentsChanged)
     Q_PROPERTY(QString directUrlMode READ directUrlMode WRITE setDirectUrlMode NOTIFY directUrlModeChanged)
+    Q_PROPERTY(QStringList youtubeResolutions READ youtubeResolutions NOTIFY youtubeFormatsChanged)
+    Q_PROPERTY(QVariantList youtubeAudioOptions READ youtubeAudioOptions NOTIFY youtubeFormatsChanged)
+    Q_PROPERTY(int youtubeResolutionIndex READ youtubeResolutionIndex NOTIFY youtubeFormatsChanged)
+    Q_PROPERTY(int youtubeAudioIndex READ youtubeAudioIndex NOTIFY youtubeFormatsChanged)
+    Q_PROPERTY(bool youtubeFormatsBusy READ youtubeFormatsBusy NOTIFY youtubeFormatsChanged)
+    Q_PROPERTY(QString youtubeFormatsError READ youtubeFormatsError NOTIFY youtubeFormatsChanged)
     Q_PROPERTY(bool audioEnabled READ isAudioEnabled WRITE setAudioEnabled NOTIFY audioEnabledChanged)
     Q_PROPERTY(QStringList preferredCodecs READ preferredCodecs WRITE setPreferredCodecs NOTIFY preferredCodecsChanged)
     Q_PROPERTY(int reconnectInitialMs READ reconnectInitialMs WRITE setReconnectInitialMs NOTIFY reconnectInitialMsChanged)
@@ -47,6 +56,7 @@ class StreamDraft : public QObject
 
 public:
     explicit StreamDraft(QObject *parent = nullptr);
+    ~StreamDraft() override;
 
     QString streamId() const { return m_config.id; }
     QString name() const { return m_config.name; }
@@ -66,6 +76,15 @@ public:
     int audioBitrateKbps() const { return m_config.youtube.audioBitrateKbps; }
     int concurrentFragments() const { return m_config.youtube.concurrentFragments; }
     QString directUrlMode() const { return m_config.youtube.directUrlMode; }
+    QStringList youtubeResolutions() const { return m_youtubeResolutions; }
+    QVariantList youtubeAudioOptions() const { return m_youtubeAudioOptions; }
+    int youtubeResolutionIndex() const { return m_youtubeResolutionIndex; }
+    int youtubeAudioIndex() const { return m_youtubeAudioIndex; }
+    bool youtubeFormatsBusy() const { return m_youtubeFormatsBusy; }
+    QString youtubeFormatsError() const { return m_youtubeFormatsError; }
+    Q_INVOKABLE void refreshYoutubeFormats();
+    Q_INVOKABLE void selectYoutubeResolution(int index);
+    Q_INVOKABLE void selectYoutubeAudio(int index);
     bool isAudioEnabled() const { return m_config.audioEnabled; }
     QStringList preferredCodecs() const;
     int reconnectInitialMs() const { return m_config.reconnectInitialMs; }
@@ -115,6 +134,7 @@ Q_SIGNALS:
     void audioBitrateKbpsChanged();
     void concurrentFragmentsChanged();
     void directUrlModeChanged();
+    void youtubeFormatsChanged();
     void audioEnabledChanged();
     void preferredCodecsChanged();
     void reconnectInitialMsChanged();
@@ -124,6 +144,19 @@ Q_SIGNALS:
     void changed();
 
 private:
+    void scheduleYoutubeProbe();
+    void cancelYoutubeProbe();
+    void syncYoutubeSelection();
+    void updateYoutubeAudioOptions();
+    QTimer m_youtubeProbeDelay;
+    QProcess *m_youtubeProbe = nullptr;
+    QVariantList m_youtubeFormats;
+    QStringList m_youtubeResolutions;
+    QVariantList m_youtubeAudioOptions;
+    int m_youtubeResolutionIndex = -1;
+    int m_youtubeAudioIndex = -1;
+    bool m_youtubeFormatsBusy = false;
+    QString m_youtubeFormatsError;
     StreamConfig m_config;
     SinkListModel *m_sinks = nullptr;
 };

@@ -18,6 +18,9 @@ enum class VideoCodec {
     Unknown,
     H264,
     H265,
+    // Only reach the pipeline when every sink decodes (NDI); passthrough sinks need H.26x.
+    Vp9,
+    Av1,
 };
 Q_ENUM_NS(VideoCodec)
 

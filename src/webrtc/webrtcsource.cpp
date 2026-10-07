@@ -164,6 +164,8 @@ void WebRtcSource::beginNegotiation(const QList<IceServerSpec> &iceServers)
         case VideoCodec::H265:
             video.addH265Codec(kVideoPayloadTypeH265);
             break;
+        case VideoCodec::Vp9:
+        case VideoCodec::Av1:
         case VideoCodec::Unknown:
             break;
         }

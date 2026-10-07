@@ -6,6 +6,8 @@
  */
 
 #include "ytdlp/ytdlpsource.h"
+#include "ytdlp/playbackclock.h"
+#include "ytdlp/ffmpegstreamoptions.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -14,6 +16,7 @@ extern "C" {
 #include "cbridgesettings.h"
 
 #include <QFile>
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -24,7 +27,9 @@ extern "C" {
 #include <windows.h>
 
 #include <cerrno>
+#include <algorithm>
 #include <chrono>
+#include <vector>
 
 // Directory holding the pinned ffmpeg.exe (set by CMake from FFMPEG_RUNTIME_DIR). yt-dlp's
 // --ffmpeg-location must point at the full executable on this layout, so the source appends
@@ -65,13 +70,31 @@ constexpr DWORD kKillWaitMs = 5000;
 /// kPipeStallSeconds, so the loop also breaks the read at this cadence by polling first.
 constexpr DWORD kPumpPollMs = 20;
 
-/// The built-in format selector (kept in sync with YouTubeSourceConfig's default). The
-/// direct-URL fast path only engages for this selector or an empty one: a custom selector
-/// is the user's explicit quality choice and the probe's muxed-HLS pick may not honour it.
-const QString &defaultFormatSelector()
+QString resolveFfmpegProgram()
 {
-    static const QString selector = u"best[ext=m3u8][vcodec~='^avc1']"_s;
-    return selector;
+    const QString pinned = QLatin1String(CBRIDGE_FFMPEG_BIN_DIR) + u"/ffmpeg.exe"_s;
+    if (QFile::exists(pinned)) return pinned;
+    const QString bundled = QCoreApplication::applicationDirPath() + u"/ffmpeg.exe"_s;
+    if (QFile::exists(bundled)) return bundled;
+    return QStandardPaths::findExecutable(u"ffmpeg"_s);
+}
+
+// Try an actual frame rather than trusting -encoders: NVENC can be compiled in
+// without a usable GPU/driver. Software encoding is the portable fallback.
+bool usableNvenc(const QString &program, const std::atomic<bool> &stop)
+{
+    QProcess check;
+    check.start(program, {u"-hide_banner"_s, u"-loglevel"_s, u"error"_s,
+        u"-f"_s, u"lavfi"_s, u"-i"_s, u"color=s=640x360:d=0.1"_s,
+        u"-frames:v"_s, u"1"_s, u"-c:v"_s, u"h264_nvenc"_s, u"-f"_s, u"null"_s, u"-"_s});
+    for (int waited = 0; waited < 5000 && !stop.load(std::memory_order_relaxed); waited += 100) {
+        if (check.waitForFinished(100))
+            return check.exitStatus() == QProcess::NormalExit && check.exitCode() == 0;
+        check.readAllStandardError();
+    }
+    check.kill();
+    check.waitForFinished(1000);
+    return false;
 }
 
 /// FFmpeg's `headers` option form: "Key: value\r\n" per line. Accept-Encoding is dropped —
@@ -108,6 +131,17 @@ YtdlpSource::~YtdlpSource()
 void YtdlpSource::setConfig(const StreamConfig &config)
 {
     m_config = config.youtube;
+    m_decodingSinksOnly = false;
+    for (const SinkConfig &sink : config.sinks) {
+        if (!sink.enabled) {
+            continue;
+        }
+        if (sink.kind != SinkKind::Ndi) {
+            m_decodingSinksOnly = false;
+            break;
+        }
+        m_decodingSinksOnly = true;
+    }
 }
 
 VideoCodec YtdlpSource::negotiatedVideoCodec() const
@@ -149,6 +183,10 @@ void YtdlpSource::start()
     m_seekRejected.store(false, std::memory_order_relaxed);
     m_assignedToJob = false;
     m_exitCodeValid = false;
+    // KConfig's generated singleton is not safe to initialise concurrently from
+    // source workers. Resolve settings on the owning thread before launching one.
+    m_pathError.clear();
+    m_ytdlpProgram = resolveYtDlpPath(&m_pathError);
     m_thread = std::thread([this] { run(); });
 }
 
@@ -336,7 +374,7 @@ QString YtdlpSource::quoteArgument(const QString &argument)
     return quoted;
 }
 
-QStringList YtdlpSource::baseArguments(bool jsonProbe) const
+QStringList YtdlpSource::baseArguments(bool jsonProbe, double startSec) const
 {
     QStringList arguments;
     arguments << u"--ignore-config"_s      // never let a user-level yt-dlp config change our flags
@@ -357,40 +395,48 @@ QStringList YtdlpSource::baseArguments(bool jsonProbe) const
                   << u"--retries"_s << u"5"_s   // transient network errors are common on long downloads
                   << u"--fragment-retries"_s << u"5"_s
                   << u"--socket-timeout"_s << u"10"_s;      // a dead connection must not stall the pipe forever
-        const QString formatSelector = m_config.formatSelector.trimmed();
-        if (!formatSelector.isEmpty()) {
-            arguments << u"-f"_s << formatSelector;
-        }
-        // The pipe contract is a single MPEG-TS-demuxable stream, so the selector must
-        // resolve to ONE muxed format (the default picks a muxed HLS stream). yt-dlp cannot
-        // merge two formats into a pipe-safe container — its merge containers (mp4/mkv/…)
-        // all keep their index at the end of the file and cannot be demuxed from a pipe —
-        // so there is deliberately no --merge-output-format here: a two-part selector fails
-        // fast at the mpegts check in spawnAndPump with an actionable message instead.
     }
 
     // When a merge does happen, yt-dlp must find our pinned ffmpeg.exe. A directory is not
     // enough on this layout (the exe sits in bin-video/, not next to the DLLs), so pass the
     // full path when it exists.
-    const QString ffmpegExe = QLatin1String(CBRIDGE_FFMPEG_BIN_DIR) + u"/ffmpeg.exe"_s;
-    if (QFile::exists(ffmpegExe)) {
-        arguments << u"--ffmpeg-location"_s << ffmpegExe;
-    }
     // User extras go after our own options but before the URL, so a stray positional token can
     // never be mistaken for a second video.
-    for (const QString &token : m_config.extraArgs.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+    for (const QString &token : QProcess::splitCommand(m_config.extraArgs)) {
         arguments.append(token);
+    }
+    // Apply the saved selector to the metadata probe as well as playback. A probe
+    // using yt-dlp's unrelated default could pick a different codec or resolution.
+    const QString selector = m_config.formatSelector.trimmed();
+    arguments << u"-f"_s << (selector.isEmpty() ? YouTubeSourceConfig {}.formatSelector : selector);
+    const QString ffmpegExe = resolveFfmpegProgram();
+    if (!ffmpegExe.isEmpty()) arguments << u"--ffmpeg-location"_s << ffmpegExe;
+    if (!jsonProbe) {
+        const bool transcode = youtubeNeedsVideoConversion(m_selectedVideoCodec, m_selectedDynamicRange,
+                                                           m_decodingSinksOnly);
+        const bool hdr = !m_selectedDynamicRange.isEmpty() && m_selectedDynamicRange != u"SDR"_s;
+        QString outputOptions = youtubeFfmpegOutputOptions(
+            transcode, hdr, m_useNvenc, m_config.audioBitrateKbps, m_separateInputs,
+            !transcode && youtubeNativeVideo(m_selectedVideoCodec));
+        // YouTube media URLs can stall indefinitely on HTTP range seeks. Skip
+        // to the target on output: decode/discard converted frames, drop copied
+        // packets up to the next keyframe, and keep the audio/video timestamps aligned.
+        if (startSec > 0.0) outputOptions += u" -ss %1"_s.arg(startSec, 0, 'f', 3);
+        arguments << u"--downloader"_s << u"ffmpeg"_s
+                  << u"--downloader-args"_s << u"ffmpeg_i:-rw_timeout 10000000"_s
+                  << u"--downloader-args"_s << (u"ffmpeg_o:"_s + outputOptions);
     }
     return arguments;
 }
 
 void YtdlpSource::probeMetadata(const QString &program)
 {
-    // One-shot `yt-dlp -J` preflight: the duration and live flag drive the UI's seek slider
-    // (plan §4.5). Best effort — on any failure the duration stays 0 and live stays false,
-    // which simply hides the seek controls rather than breaking the feed.
+    // Resolve the saved selection before deciding whether video needs conversion.
+    // A failed probe must fail playback rather than pass an unknown codec to the sinks.
     QStringList arguments = baseArguments(true);
-    arguments << m_config.url.toString().trimmed();
+    arguments << u"--"_s << m_config.url.toString().trimmed();
+    m_formatResolved = false;
+    m_probeError = u"The selected video/audio formats could not be resolved. Refresh the format list and try again."_s;
 
     // Every exit below is "no direct URL": clear first so a failed re-probe in the
     // fallback ladder can never leave a stale URL that keeps directEligible() true and
@@ -403,6 +449,7 @@ void YtdlpSource::probeMetadata(const QString &program)
     probe.setArguments(arguments);
     probe.start();
     if (!probe.waitForStarted(5000)) {
+        m_probeError = probe.errorString();
         m_probed.store(true, std::memory_order_relaxed);
         return;
     }
@@ -416,12 +463,13 @@ void YtdlpSource::probeMetadata(const QString &program)
     constexpr int kProbeSliceMs = 200;
     constexpr qint64 kProbeMaxBytes = 8 * 1024 * 1024;
     QByteArray stdoutBuffer;
+    QByteArray stderrBuffer;
     bool jsonConfirmed = false;
     int waited = 0;
     bool finished = false;
     while (true) {
         stdoutBuffer += probe.readAllStandardOutput();
-        probe.readAllStandardError();
+        stderrBuffer = (stderrBuffer + probe.readAllStandardError()).right(4096);
 
         if (!jsonConfirmed) {
             // The first non-whitespace byte decides: a real -J run answers with a JSON
@@ -460,6 +508,7 @@ void YtdlpSource::probeMetadata(const QString &program)
             break;
         }
         if (m_stop.load(std::memory_order_relaxed) || waited >= kProbeBudgetMs) {
+            m_probeError = u"yt-dlp metadata query timed out or was cancelled"_s;
             probe.kill();
             probe.waitForFinished(1000);
             m_probed.store(true, std::memory_order_relaxed);
@@ -468,6 +517,7 @@ void YtdlpSource::probeMetadata(const QString &program)
         waited += kProbeSliceMs;
     }
     if (probe.exitStatus() != QProcess::NormalExit || probe.exitCode() != 0) {
+        m_probeError += u"\n"_s + QString::fromUtf8(stderrBuffer + probe.readAllStandardError()).trimmed();
         m_probed.store(true, std::memory_order_relaxed);
         return;
     }
@@ -488,48 +538,29 @@ void YtdlpSource::probeMetadata(const QString &program)
     m_durationSec.store(duration > 0.0 ? duration : 0.0, std::memory_order_relaxed);
     m_live.store(live, std::memory_order_relaxed);
 
-    // Direct-URL fast path (plan §4): pick the best muxed H.264+AAC HLS format and keep
-    // its resolved URL and request headers, so a later generation can hand the playlist
-    // straight to FFmpeg's HLS reader and skip the yt-dlp pipe. Only for the built-in (or
-    // empty) selector: a custom selector is the user's explicit quality choice and the
-    // muxed pick below may not honour it. Best effort — no match simply keeps the pipe.
-    m_directUrl.clear();
-    m_directHeaders.clear();
-    const QString selector = m_config.formatSelector.trimmed();
-    const bool selectorAllowsDirect = selector.isEmpty() || selector == defaultFormatSelector();
-    if (m_config.directUrlMode != u"off"_s && selectorAllowsDirect) {
-        int bestBitrate = -1;
-        for (const QJsonValue &value : info.value(u"formats"_s).toArray()) {
-            const QJsonObject format = value.toObject();
-            const QString protocol = format.value(u"protocol"_s).toString();
-            const QString videoCodecName = format.value(u"vcodec"_s).toString();
-            const QString audioCodecName = format.value(u"acodec"_s).toString();
-            const QString url = format.value(u"url"_s).toString();
-            if (!protocol.startsWith(u"m3u8"_s) || url.isEmpty()) {
-                continue;
-            }
-            // Muxed only: one playlist carrying both tracks, AAC audio (mp4a.* in
-            // YouTube's naming) and H.264 video — the exact pair the pipeline contract
-            // and the AAC→Opus transcoder are built for.
-            if (!videoCodecName.startsWith(u"avc1"_s)) {
-                continue;
-            }
-            if (audioCodecName.isEmpty() || audioCodecName == u"none"_s
-                || (!audioCodecName.startsWith(u"mp4a"_s) && !audioCodecName.startsWith(u"aac"_s))) {
-                continue;
-            }
-            const int bitrate = format.value(u"tbr"_s).toInt(0);
-            if (bitrate > bestBitrate) {
-                bestBitrate = bitrate;
-                m_directUrl = url;
-                m_directHeaders = buildHeaderString(format.value(u"http_headers"_s).toObject());
-            }
-        }
-        if (m_directUrl.isEmpty() && m_config.directUrlMode == u"force"_s) {
-            qWarning("ytdlp: direct-url mode forced but the probe found no muxed H.264+AAC "
-                     "HLS format for %s — using the yt-dlp pipe",
-                     qUtf8Printable(m_config.url.toString()));
-        }
+    QJsonObject selectedVideo = info;
+    const auto selectedFormats = info.value(u"requested_formats"_s).toArray();
+    m_separateInputs = selectedFormats.size() > 1;
+    for (const auto &value : selectedFormats) {
+        const auto f = value.toObject();
+        const auto codec = f.value(u"vcodec"_s).toString();
+        if (!codec.isEmpty() && codec != u"none"_s) { selectedVideo = f; break; }
+    }
+    m_selectedVideoCodec = selectedVideo.value(u"vcodec"_s).toString();
+    m_selectedDynamicRange = selectedVideo.value(u"dynamic_range"_s).toString();
+    m_formatResolved = youtubeVideoPassthrough(m_selectedVideoCodec)
+        || m_selectedVideoCodec.startsWith(u"vp9"_s) || m_selectedVideoCodec.startsWith(u"vp09"_s)
+        || m_selectedVideoCodec.startsWith(u"av01"_s);
+
+    // Only the actually selected bundled HLS stream may use the direct reader.
+    // Separate inputs and HDR/codec conversion must go through the FFmpeg merge pipe.
+    const auto audio = selectedVideo.value(u"acodec"_s).toString();
+    if (m_config.directUrlMode != u"off"_s && !m_separateInputs
+        && !youtubeNeedsVideoConversion(m_selectedVideoCodec, m_selectedDynamicRange)
+        && selectedVideo.value(u"protocol"_s).toString().startsWith(u"m3u8"_s)
+        && (audio.startsWith(u"mp4a"_s) || audio.startsWith(u"aac"_s))) {
+        m_directUrl = selectedVideo.value(u"url"_s).toString();
+        m_directHeaders = buildHeaderString(selectedVideo.value(u"http_headers"_s).toObject());
     }
 
     m_probed.store(true, std::memory_order_relaxed);
@@ -547,8 +578,8 @@ bool YtdlpSource::run()
     m_audioSampleRate.store(48000, std::memory_order_relaxed);
     m_audioChannels.store(2, std::memory_order_relaxed);
 
-    QString error;
-    const QString program = resolveYtDlpPath(&error);
+    QString error = m_pathError;
+    const QString program = m_ytdlpProgram;
     if (program.isEmpty()) {
         Q_EMIT errorOccurred(error);
         setState(StreamState::Failed);
@@ -561,6 +592,29 @@ bool YtdlpSource::run()
     // reconnects, and re-probing on every replay would add seconds to each restart.
     if (!m_probed.load(std::memory_order_relaxed)) {
         probeMetadata(program);
+    }
+    if (m_stop.load(std::memory_order_relaxed)) return true;
+    if (!m_formatResolved) {
+        m_probed.store(false, std::memory_order_relaxed); // Retry resolution after a transient probe failure.
+        Q_EMIT errorOccurred(m_probeError);
+        setState(StreamState::Failed);
+        return false;
+    }
+    m_ffmpegProgram = resolveFfmpegProgram();
+    if (m_ffmpegProgram.isEmpty() && !directEligible()) {
+        Q_EMIT errorOccurred(u"FFmpeg is required to merge/convert the selected video and audio. Install ffmpeg or place ffmpeg.exe next to C-Bridge.exe."_s);
+        setState(StreamState::Failed);
+        return false;
+    }
+    if (youtubeNeedsVideoConversion(m_selectedVideoCodec, m_selectedDynamicRange, m_decodingSinksOnly)) {
+        m_useNvenc = usableNvenc(m_ffmpegProgram, m_stop);
+        setLastEvent(u"FFmpeg merge · %1→H.264 (%2)"_s.arg(m_selectedVideoCodec,
+            m_useNvenc ? u"NVIDIA"_s : u"software"_s));
+    } else if (youtubeNativeVideo(m_selectedVideoCodec)) {
+        setLastEvent(u"FFmpeg merge · %1 passthrough to NDI + Opus"_s.arg(m_selectedVideoCodec));
+    } else {
+        setLastEvent(m_separateInputs ? u"FFmpeg merge · video passthrough + Opus"_s
+                                     : u"FFmpeg pipe · video passthrough + Opus"_s);
     }
 
     // Resume position (plan §2): when the pipeline's reconnect timer restarted us after a
@@ -619,6 +673,15 @@ bool YtdlpSource::run()
             }
         } else {
             spawnAndPump(program, startSec, &result, &generationError);
+        }
+
+        // An encoder may pass the capability check yet reject the actual dimensions
+        // or run out of sessions. Retry once in software before any packet is delivered.
+        if (result == GenerationResult::Failed && !m_lastGenerationDelivered && m_useNvenc
+            && !m_stop.load(std::memory_order_relaxed)) {
+            m_useNvenc = false;
+            setLastEvent(u"FFmpeg merge · software fallback after NVIDIA output failure"_s);
+            continue;
         }
 
         // A clean close well before the expected end is indistinguishable from a crashed
@@ -701,6 +764,9 @@ bool YtdlpSource::run()
 bool YtdlpSource::spawnAndPump(const QString &program, double startSec,
                                GenerationResult *result, QString *error)
 {
+    // A converted seek may need to decode forward before the first output frame.
+    // Once delivery starts, keep the usual short stall budget for network recovery.
+    m_initialPipeStallSeconds = int(qBound(30.0, startSec, 180.0));
     // --- Job object ---------------------------------------------------------------
     // The PyInstaller onefile yt-dlp.exe is a bootloader parent plus the real Python child,
     // and it is the child that owns the stdout pipe handle. Killing only the top process
@@ -807,19 +873,8 @@ bool YtdlpSource::spawnAndPump(const QString &program, double startSec,
     };
 
     // --- Command line -----------------------------------------------------------------
-    QStringList arguments = baseArguments(false);
-    if (startSec > 0.0) {
-        // Seek: ask yt-dlp for the section from the target to the end. Verified against the
-        // installed yt-dlp for the HLS/avc1 formats the default selector picks: with -o - the
-        // section extraction runs through ffmpeg and correct MPEG-TS bytes reach the pipe.
-        QString section = u"*%1-"_s.arg(startSec, 0, 'f', 2);
-        const double duration = m_durationSec.load(std::memory_order_relaxed);
-        if (duration > startSec) {
-            section += u"%1"_s.arg(duration, 0, 'f', 2); // explicit end keeps ffmpeg from probing to EOF
-        }
-        arguments << u"--download-sections"_s << section;
-    }
-    arguments << u"-o"_s << u"-"_s << m_config.url.toString().trimmed();
+    QStringList arguments = baseArguments(false, startSec);
+    arguments << u"-o"_s << u"-"_s << u"--"_s << m_config.url.toString().trimmed();
 
     QString commandLine = quoteArgument(program);
     for (const QString &argument : arguments) {
@@ -899,12 +954,17 @@ bool YtdlpSource::spawnAndPump(const QString &program, double startSec,
         return fail(u"could not probe the yt-dlp output: %1"_s.arg(QString::fromUtf8(errbuf)));
     }
 
-    // The pipe contract is MPEG-TS. If yt-dlp produced anything else (a selector that picked
-    // a progressive file, a failed merge, ...) the demuxer would still "work" but the output
-    // would be unusable downstream — fail fast with an actionable message instead.
-    if (!format->iformat || QString::fromUtf8(format->iformat->name) != u"mpegts"_s) {
+    // The pipe contract is MPEG-TS, or Matroska for VP9/AV1 passthrough. If yt-dlp produced
+    // anything else (a selector that picked a progressive file, a failed merge, ...) the
+    // demuxer would still "work" but the output would be unusable downstream — fail fast
+    // with an actionable message instead.
+    const bool nativeVideo =
+        !youtubeNeedsVideoConversion(m_selectedVideoCodec, m_selectedDynamicRange, m_decodingSinksOnly)
+        && youtubeNativeVideo(m_selectedVideoCodec);
+    const QString expectedFormat = nativeVideo ? u"matroska,webm"_s : u"mpegts"_s;
+    if (!format->iformat || QString::fromUtf8(format->iformat->name) != expectedFormat) {
         const QString got = format->iformat ? QString::fromUtf8(format->iformat->name) : u"(unknown)"_s;
-        return fail(u"yt-dlp produced %1, expected MPEG-TS — check the format selector"_s.arg(got));
+        return fail(u"yt-dlp produced %1, expected %2 — check the format selector"_s.arg(got, expectedFormat));
     }
 
     // --- Identify the streams -------------------------------------------------------------
@@ -912,8 +972,9 @@ bool YtdlpSource::spawnAndPump(const QString &program, double startSec,
     int audioIndex = -1;
     for (unsigned i = 0; i < format->nb_streams; ++i) {
         const AVCodecParameters *par = format->streams[i]->codecpar;
-        if (videoIndex < 0 && par->codec_type == AVMEDIA_TYPE_VIDEO
-            && (par->codec_id == AV_CODEC_ID_H264 || par->codec_id == AV_CODEC_ID_HEVC)) {
+        const bool usableVideo = par->codec_id == AV_CODEC_ID_H264 || par->codec_id == AV_CODEC_ID_HEVC
+            || (nativeVideo && (par->codec_id == AV_CODEC_ID_VP9 || par->codec_id == AV_CODEC_ID_AV1));
+        if (videoIndex < 0 && par->codec_type == AVMEDIA_TYPE_VIDEO && usableVideo) {
             videoIndex = int(i);
         } else if (audioIndex < 0 && par->codec_type == AVMEDIA_TYPE_AUDIO) {
             audioIndex = int(i);
@@ -921,11 +982,16 @@ bool YtdlpSource::spawnAndPump(const QString &program, double startSec,
     }
 
     if (videoIndex < 0) {
-        return fail(u"no H.264/HEVC video stream in the feed — check the format selector"_s);
+        return fail(u"no usable video stream in the feed — check the format selector"_s);
     }
 
-    const VideoCodec videoCodec =
-        format->streams[videoIndex]->codecpar->codec_id == AV_CODEC_ID_HEVC ? VideoCodec::H265 : VideoCodec::H264;
+    VideoCodec videoCodec = VideoCodec::H264;
+    switch (format->streams[videoIndex]->codecpar->codec_id) {
+    case AV_CODEC_ID_HEVC: videoCodec = VideoCodec::H265; break;
+    case AV_CODEC_ID_VP9: videoCodec = VideoCodec::Vp9; break;
+    case AV_CODEC_ID_AV1: videoCodec = VideoCodec::Av1; break;
+    default: break;
+    }
     m_videoCodec.store(videoCodec, std::memory_order_relaxed);
     Q_EMIT videoCodecNegotiated(videoCodec);
 
@@ -1011,6 +1077,17 @@ void YtdlpSource::pumpPackets(AVFormatContext *format, int videoIndex, int audio
     // the first PTS is taken from the packet stream that follows the seek.
     std::int64_t firstVideoPts64 = AV_NOPTS_VALUE;
     double positionBaseSec = startSec;
+    PlaybackClock playbackClock;
+
+    // Matroska may keep AV1's sequence header only in av1C, but the decoders downstream get
+    // no extradata, so keyframes carry it in-band like H.264 parameter sets.
+    std::vector<std::uint8_t> av1ConfigObus;
+    std::vector<std::uint8_t> av1Keyframe;
+    const AVCodecParameters *videoPar = format->streams[videoIndex]->codecpar;
+    if (videoPar->codec_id == AV_CODEC_ID_AV1 && videoPar->extradata_size > 4
+        && (videoPar->extradata[0] & 0x80)) {
+        av1ConfigObus.assign(videoPar->extradata + 4, videoPar->extradata + videoPar->extradata_size);
+    }
 
     for (;;) {
         if (m_stop.load(std::memory_order_relaxed)) {
@@ -1040,6 +1117,7 @@ void YtdlpSource::pumpPackets(AVFormatContext *format, int videoIndex, int audio
                 break;
             }
             firstVideoPts64 = AV_NOPTS_VALUE;
+            playbackClock.reset();
             haveLastVideoTs = false;
             haveAudioAnchor = false;
             audioFrameIndex = 0;
@@ -1055,7 +1133,13 @@ void YtdlpSource::pumpPackets(AVFormatContext *format, int videoIndex, int audio
             // OS backpressure; on the direct path the HLS reader simply stops fetching the
             // next segment. Either way: no bytes lost, no process churn. Stop and seek are
             // still polled above, so both work while paused.
-            Sleep(kPumpPollMs);
+            const auto pauseStart = PlaybackClock::Clock::now();
+            while (m_paused.load(std::memory_order_relaxed)
+                   && !m_stop.load(std::memory_order_relaxed)
+                   && m_seekToMs.load(std::memory_order_relaxed) < 0) {
+                Sleep(kPumpPollMs);
+            }
+            playbackClock.delay(PlaybackClock::Clock::now() - pauseStart);
             continue;
         }
 
@@ -1087,6 +1171,42 @@ void YtdlpSource::pumpPackets(AVFormatContext *format, int videoIndex, int audio
                 *result = GenerationResult::Failed;
             }
             break;
+        }
+
+        if ((packet->stream_index == videoIndex || packet->stream_index == audioIndex)
+            && packet->size > 0) {
+            const auto timestamp = packet->dts != AV_NOPTS_VALUE ? packet->dts : packet->pts;
+            if (timestamp != AV_NOPTS_VALUE) {
+                const auto mediaUs = av_rescale_q(timestamp,
+                    format->streams[packet->stream_index]->time_base, AVRational { 1, 1000000 });
+                auto due = playbackClock.deadline(mediaUs, PlaybackClock::Clock::now());
+                while (!m_stop.load(std::memory_order_relaxed)
+                       && m_seekToMs.load(std::memory_order_relaxed) < 0) {
+                    if (m_paused.load(std::memory_order_relaxed)) {
+                        const auto pauseStart = PlaybackClock::Clock::now();
+                        while (m_paused.load(std::memory_order_relaxed)
+                               && !m_stop.load(std::memory_order_relaxed)
+                               && m_seekToMs.load(std::memory_order_relaxed) < 0) {
+                            Sleep(kPumpPollMs);
+                        }
+                        const auto pausedFor = PlaybackClock::Clock::now() - pauseStart;
+                        playbackClock.delay(pausedFor);
+                        due += pausedFor;
+                    }
+                    const auto remaining = due - PlaybackClock::Clock::now();
+                    if (remaining <= PlaybackClock::Clock::duration::zero()) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::min(remaining,
+                        std::chrono::duration_cast<PlaybackClock::Clock::duration>(
+                            std::chrono::milliseconds(kPumpPollMs))));
+                }
+                if (m_stop.load(std::memory_order_relaxed)
+                    || m_seekToMs.load(std::memory_order_relaxed) >= 0) {
+                    av_packet_unref(packet);
+                    continue;
+                }
+            }
         }
 
         if (packet->stream_index == videoIndex && packet->size > 0) {
@@ -1140,7 +1260,13 @@ void YtdlpSource::pumpPackets(AVFormatContext *format, int videoIndex, int audio
                 m_deliveryStartTime = std::chrono::steady_clock::now();
             }
 
-            m_onVideo(packet->data, std::size_t(packet->size), dtsTs, ptsTs);
+            if (!av1ConfigObus.empty() && (packet->flags & AV_PKT_FLAG_KEY)) {
+                av1Keyframe.assign(av1ConfigObus.begin(), av1ConfigObus.end());
+                av1Keyframe.insert(av1Keyframe.end(), packet->data, packet->data + packet->size);
+                m_onVideo(av1Keyframe.data(), av1Keyframe.size(), dtsTs, ptsTs);
+            } else {
+                m_onVideo(packet->data, std::size_t(packet->size), dtsTs, ptsTs);
+            }
         } else if (audioIndex >= 0 && packet->stream_index == audioIndex && packet->size > 0) {
             const std::int64_t pts = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
             if (!haveAudioAnchor) {
@@ -1386,7 +1512,7 @@ int YtdlpSource::pipeReadCallback(void *opaque, std::uint8_t *buf, int bufSize)
         if (!PeekNamedPipe(static_cast<HANDLE>(self->m_stdoutRead), nullptr, 0, nullptr, &available, nullptr)) {
             // The pipe is broken: every write end has closed (yt-dlp exited or crashed).
             const BOOL exited = self->m_process && WaitForSingleObject(static_cast<HANDLE>(self->m_process), 0) == WAIT_OBJECT_0;
-            return exited ? 0 : AVERROR(EIO); // 0 is a clean EOF for libavformat
+            return exited ? AVERROR_EOF : AVERROR(EIO); // Returning 0 would make AVIO retry forever.
         }
 
         if (available > 0) {
@@ -1399,7 +1525,8 @@ int YtdlpSource::pipeReadCallback(void *opaque, std::uint8_t *buf, int bufSize)
         // empty pipe is the expected steady state, not a failure.
         if (!self->m_paused.load(std::memory_order_relaxed)) {
             const auto now = std::chrono::steady_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - self->m_lastByteTime).count() >= kPipeStallSeconds) {
+            const int budget = self->m_lastGenerationDelivered ? kPipeStallSeconds : self->m_initialPipeStallSeconds;
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - self->m_lastByteTime).count() >= budget) {
                 return AVERROR(ETIMEDOUT);
             }
         }
@@ -1412,7 +1539,7 @@ int YtdlpSource::pipeReadCallback(void *opaque, std::uint8_t *buf, int bufSize)
     }
     if (got == 0) {
         // ReadFile reports zero bytes once every write end has closed.
-        return 0;
+        return AVERROR_EOF;
     }
     self->m_lastByteTime = std::chrono::steady_clock::now();
     return static_cast<int>(got);

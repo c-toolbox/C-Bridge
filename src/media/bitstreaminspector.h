@@ -57,12 +57,19 @@ public:
     /// muxer downstream has enough to start.
     bool hasParameterSets() const { return m_hasParameterSets; }
 
+    /// Only H.264/H.265 carry out-of-band parameter sets; VP9/AV1 keyframes are self-contained.
+    static bool usesParameterSets(VideoCodec codec)
+    {
+        return codec == VideoCodec::H264 || codec == VideoCodec::H265;
+    }
+
 private:
     VideoCodec m_codec = VideoCodec::Unknown;
     AVCodecParserContext *m_parser = nullptr;
     AVCodecContext *m_codecContext = nullptr;
 
     bool m_hasParameterSets = false;
+    bool m_av1ReducedStillPicture = false;
     int m_width = 0;
     int m_height = 0;
 };

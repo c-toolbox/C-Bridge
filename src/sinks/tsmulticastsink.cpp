@@ -37,6 +37,8 @@ AVCodecID toAvCodecId(VideoCodec codec)
     switch (codec) {
     case VideoCodec::H264: return AV_CODEC_ID_H264;
     case VideoCodec::H265: return AV_CODEC_ID_HEVC;
+    case VideoCodec::Vp9:
+    case VideoCodec::Av1:
     case VideoCodec::Unknown: break;
     }
     return AV_CODEC_ID_NONE;

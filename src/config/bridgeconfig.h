@@ -135,10 +135,9 @@ struct SrtSourceConfig {
 struct YouTubeSourceConfig {
     QUrl url;
 
-    /// yt-dlp format selector. The default picks an HLS stream with H.264 video: TS is
-    /// stream-by-design on an unseekable pipe, while progressive MP4 keeps its moov atom at
-    /// the end of the file and cannot be demuxed from a pipe. Empty lets yt-dlp choose.
-    QString formatSelector = QStringLiteral("best[ext=m3u8][vcodec~='^avc1']");
+    /// yt-dlp format selector: independent video/audio IDs use "video+audio". FFmpeg
+    /// fetches and merges them into a streaming MPEG-TS pipe, converting video as needed.
+    QString formatSelector = QStringLiteral("bestvideo+bestaudio/best");
 
     /// Extra yt-dlp arguments appended verbatim (split on spaces), e.g. cookies or a JS
     /// runtime: "--cookies-from-browser chrome".

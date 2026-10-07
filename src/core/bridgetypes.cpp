@@ -16,6 +16,8 @@ QString toString(VideoCodec codec)
     switch (codec) {
     case VideoCodec::H264: return u"h264"_s;
     case VideoCodec::H265: return u"h265"_s;
+    case VideoCodec::Vp9: return u"vp9"_s;
+    case VideoCodec::Av1: return u"av1"_s;
     case VideoCodec::Unknown: break;
     }
     return u"unknown"_s;
@@ -29,6 +31,12 @@ VideoCodec videoCodecFromString(const QString &text)
     }
     if (normalized == u"h265"_s || normalized == u"hevc"_s) {
         return VideoCodec::H265;
+    }
+    if (normalized == u"vp9"_s) {
+        return VideoCodec::Vp9;
+    }
+    if (normalized == u"av1"_s) {
+        return VideoCodec::Av1;
     }
     return VideoCodec::Unknown;
 }

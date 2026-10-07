@@ -30,12 +30,6 @@ namespace CBridge {
 
 namespace {
 
-/// Preview frames are capped so a 4K/60 source does not burn the GUI's texture memory or
-/// CPU on frames nobody can perceive; the filter's last stage converts to BGR0, which maps
-/// 1:1 onto QImage::Format_RGB32.
-constexpr int kPreviewFpsNum = 30;
-constexpr int kPreviewFpsDen = 1;
-
 /// Longest video frame the preview will render; larger sources are scaled down to fit,
 /// keeping the viewer window's texture footprint bounded.
 constexpr int kPreviewMaxWidth = 1920;
@@ -265,8 +259,10 @@ void StreamPreview::onDecodedVideo(AVFrame *frame)
         }
 
         QString error;
+        // Preserve the source cadence. A forced 30 fps duplicates 25 fps frames and drops
+        // alternate 50/60 fps frames, introducing judder even when packet pacing is correct.
         if (!m_videoFilter.open(frame, AVRational { 1, kRtpVideoClock }, width, height,
-                                kPreviewFpsNum, kPreviewFpsDen, AV_PIX_FMT_BGR0, &error)) {
+                                0, 1, AV_PIX_FMT_BGR0, &error)) {
             m_filterFailed = true;
             qWarning("preview: %s", qUtf8Printable(error));
             return;
@@ -286,14 +282,22 @@ void StreamPreview::onFilteredVideo(AVFrame *frame)
         return;
     }
 
-    const int stride = frame->width * 4; // BGR0 = 32 bpp
-
-    // Build the QImage over the filter's padded output and immediately copy it: copy()
-    // detaches into a buffer the QImage (and through it the QVideoFrame) owns, so nothing
-    // here aliases the filter's reusable output frame.
-    QImage wrapped(reinterpret_cast<const uchar *>(frame->data[0]), frame->width,
-                   frame->height, stride, QImage::Format_RGB32);
-    const QImage image = wrapped.copy();
+    // Copy visible pixels row by row: FFmpeg may pad rows (or use a negative stride).
+    // The image owns its storage before the filter recycles the AVFrame.
+    QImage image(frame->width, frame->height, QImage::Format_RGB32);
+    if (image.isNull()) {
+        return;
+    }
+    for (int y = 0; y < frame->height; ++y) {
+        std::memcpy(image.scanLine(y), frame->data[0] + std::ptrdiff_t(y) * frame->linesize[0],
+                    std::size_t(frame->width) * 4);
+        // BGR0's unused byte may be zero; RGB32 requires an opaque alpha byte. Qt's
+        // video conversion otherwise treats those pixels as transparent.
+        auto *row = reinterpret_cast<QRgb *>(image.scanLine(y));
+        for (int x = 0; x < frame->width; ++x) {
+            row[x] |= 0xff000000;
+        }
+    }
 
     QVideoFrame videoFrame(image);
     if (!videoFrame.isValid()) {

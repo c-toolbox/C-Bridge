@@ -35,6 +35,13 @@ extern "C" {
 
 #include <cstdio>
 #include <cstring>
+#include <vector>
+
+namespace CBridge {
+struct PreviewFrameTestAccess {
+    static void publish(StreamPreview &preview, AVFrame *frame) { preview.onFilteredVideo(frame); }
+};
+}
 
 using namespace Qt::Literals::StringLiterals;
 using namespace CBridge;
@@ -148,6 +155,39 @@ int main(int argc, char *argv[])
     preview.attachTo(&sink);
     check(preview.isActive(), "preview active after attachTo");
 
+    // Exercise padded RGB rows, which an ordinary 640-wide fixture does not expose.
+    // Use a different color on every row so a wrong stride cannot pass visually.
+    AVFrame padded {};
+    padded.width = 638;
+    padded.height = 17;
+    padded.linesize[0] = 2560;
+    std::vector<unsigned char> pixels(padded.linesize[0] * padded.height, 0xa5);
+    padded.data[0] = pixels.data();
+    for (int y = 0; y < padded.height; ++y) {
+        auto *row = reinterpret_cast<QRgb *>(pixels.data() + y * padded.linesize[0]);
+        for (int x = 0; x < padded.width; ++x) {
+            row[x] = qRgb(x % 256, y * 13, (x + y) % 256) & 0x00ffffff; // BGR0 padding byte
+        }
+    }
+    PreviewFrameTestAccess::publish(preview, &padded);
+    QImage rendered = sink.videoFrame().toImage();
+    bool rowsCorrect = rendered.size() == QSize(padded.width, padded.height);
+    for (int y = 0; rowsCorrect && y < padded.height; ++y) {
+        for (int x = 0; x < padded.width; ++x) {
+            rowsCorrect &= rendered.pixel(x, y) == qRgb(x % 256, y * 13, (x + y) % 256);
+        }
+    }
+    check(rowsCorrect, "all preview pixels preserve padded row stride");
+    padded.data[0] = pixels.data() + (padded.height - 1) * padded.linesize[0];
+    padded.linesize[0] = -padded.linesize[0];
+    PreviewFrameTestAccess::publish(preview, &padded);
+    rendered = sink.videoFrame().toImage();
+    check(rendered.pixel(0, 0) == qRgb(0, 16 * 13, 16)
+          && rendered.pixel(637, 16) == qRgb(637 % 256, 0, 637 % 256),
+          "preview handles negative row stride");
+    preview.reset();
+    receivedFrames = 0;
+
     // ---- 1 + 2: feed the fixture, expect video frames and non-silent audio ----
     AVPacket *pkt = av_packet_alloc();
     int videoUnitsFed = 0;
@@ -177,6 +217,8 @@ int main(int argc, char *argv[])
     check(audioUnitsFed > 0, "fixture carried audio packets");
     check(preview.hasFrame(), "preview produced a frame (hasFrame)");
     check(receivedFrames > 0, "attached QVideoSink received frames");
+    check(receivedFrames <= videoUnitsFed && receivedFrames >= videoUnitsFed - 10,
+          "preview preserves native cadence without fps conversion repeats/drops");
     check(receivedWidth == format.width && receivedHeight == format.height,
           "frame size matches the source (no scaling for 640x360)");
 

@@ -392,7 +392,9 @@ void StreamPipeline::handleVideoUnit(const MediaUnit &unit)
     // Sinks need the parameter sets, not a resolution: FFmpeg's parser only reports
     // width one access unit late, which would drop the very keyframe that carries them.
     if (!m_sawKeyframe) {
-        if (!info.isKeyframe || m_parameterSets.empty()) {
+        if (!info.isKeyframe
+            || (BitstreamInspector::usesParameterSets(m_inspector.codec())
+                && m_parameterSets.empty())) {
             return;
         }
         m_sawKeyframe = true;

@@ -36,7 +36,12 @@ AVPixelFormat selectHwFormat(AVCodecContext *, const AVPixelFormat *formats)
 
 AVCodecID toAvCodecId(VideoCodec codec)
 {
-    return codec == VideoCodec::H265 ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
+    switch (codec) {
+    case VideoCodec::H265: return AV_CODEC_ID_HEVC;
+    case VideoCodec::Vp9: return AV_CODEC_ID_VP9;
+    case VideoCodec::Av1: return AV_CODEC_ID_AV1;
+    default: return AV_CODEC_ID_H264;
+    }
 }
 
 } // namespace
@@ -70,7 +75,11 @@ bool VideoDecoder::open(VideoCodec codec, QString *error)
     }
 
     const AVCodecID codecId = toAvCodecId(codec);
-    const AVCodec *decoder = avcodec_find_decoder(codecId);
+    // FFmpeg's native AV1 decoder only works through a hwaccel; dav1d decodes everywhere.
+    const AVCodec *decoder = codec == VideoCodec::Av1 ? avcodec_find_decoder_by_name("libdav1d") : nullptr;
+    if (!decoder) {
+        decoder = avcodec_find_decoder(codecId);
+    }
     if (!decoder) {
         if (error) {
             *error = u"No decoder available for %1"_s.arg(CBridge::toString(codec));

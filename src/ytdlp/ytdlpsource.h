@@ -28,17 +28,18 @@ namespace CBridge {
 
 /// Pulls a YouTube video through yt-dlp and feeds the pipeline like any other source.
 ///
-/// A child `yt-dlp -f <selector> -o - <url>` writes one interleaved media stream to stdout,
+/// A child `yt-dlp -f <video+audio> --downloader ffmpeg -o - <url>` writes one interleaved media stream to stdout,
 /// redirected into an anonymous Win32 pipe; the worker thread demuxes that pipe with
 /// libavformat through a custom AVIOContext whose read callback pulls from the pipe with a
 /// short peek timeout and checks the stop flag — the same interruptible-read contract
 /// SrtSource achieves with its interrupt callback.
 ///
-/// Container choice: v1 selects an HLS (MPEG-TS) format, because TS is stream-by-design on
-/// an unseekable pipe while progressive MP4 keeps its moov atom at the end of the file and
-/// cannot be demuxed from a pipe. Video passes through as Annex-B exactly like the SRT path;
-/// YouTube's AAC audio is transcoded to Opus 48 kHz stereo inside this source
-/// (AudioTranscoder), so the pipeline, queue and every sink stay untouched.
+/// FFmpeg merges independent inputs into pipe-safe MPEG-TS. H.264/HEVC pass through;
+/// VP9/AV1 and HDR convert to SDR H.264 at the source resolution (NVENC when usable,
+/// libx264 otherwise). When every enabled sink decodes the video itself (NDI), SDR VP9/AV1
+/// skip that conversion and pass through in Matroska instead. Audio becomes Opus 48 kHz
+/// stereo. The direct reader remains
+/// available for selected bundled HLS streams; its AAC audio uses AudioTranscoder.
 class YtdlpSource : public StreamSource
 {
     Q_OBJECT
@@ -67,7 +68,7 @@ public:
     void requestPause() override;
     void requestResume() override;
 
-    /// Restarts the child at `positionMs` with --download-sections. Ignored (once, with an
+    /// Restarts the merge child at `positionMs` using FFmpeg's output seek. Ignored (once, with an
     /// error) for live feeds, which have no seekable timeline.
     void requestSeek(qint64 positionMs) override;
 
@@ -125,8 +126,8 @@ private:
                           bool *transcodingAudio, QString *error);
 
     /// One-shot `yt-dlp -J` preflight: fills in the duration and live flag that drive the UI's
-    /// seek slider, and the direct-URL/headers for the muxed-HLS fast path. Best effort — a
-    /// failure leaves duration 0 and live false.
+    /// seek slider, the selected codec/conversion requirements and the direct-URL/headers
+    /// for compatible bundled HLS. A failed probe prevents unsafe codec passthrough.
     void probeMetadata(const QString &program);
 
     /// AVIOContext read callback: pulls from the stdout pipe with a short peek timeout,
@@ -158,17 +159,30 @@ private:
 
     /// The shared yt-dlp argument prefix: config isolation, retries and the pinned ffmpeg.
     /// `jsonProbe` switches to the machine-readable metadata form used by probeMetadata().
-    QStringList baseArguments(bool jsonProbe) const;
+    QStringList baseArguments(bool jsonProbe, double startSec = 0.0) const;
 
     /// Records a one-line recovery event for the UI ("resumed at 12.3 s after stall", …).
     /// Worker thread; read by the GUI through lastEvent().
     void setLastEvent(const QString &event);
 
     /// True when the direct-URL path is available for the next generation: the mode is not
-    /// "off", the probe found a usable muxed HLS URL, and no earlier attempt gave up.
+    /// "off", the probe found a usable muxed HLS URL matching the selector, and no
+    /// earlier attempt gave up.
     bool directEligible() const;
 
     YouTubeSourceConfig m_config;
+    /// Every enabled sink decodes (NDI), so no sink needs H.264/H.265 on the wire.
+    bool m_decodingSinksOnly = false;
+    bool m_formatResolved = false;
+    QString m_probeError;
+    QString m_selectedVideoCodec;
+    QString m_selectedDynamicRange;
+    bool m_separateInputs = false;
+    bool m_useNvenc = false;
+    QString m_ffmpegProgram;
+    QString m_ytdlpProgram;
+    QString m_pathError;
+    int m_initialPipeStallSeconds = 30;
 
     std::thread m_thread;
     std::atomic<bool> m_stop { false };
